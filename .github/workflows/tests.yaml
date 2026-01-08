@@ -1,0 +1,75 @@
+name: tests
+
+on:
+  push:
+    branches: ["master"]
+    paths:
+      - '**.go'
+      - '**.mod'
+  pull_request:
+    paths:
+      - '**.go'
+      - '**.mod'
+  workflow_dispatch: {}
+
+jobs:
+  lint:
+    if: ${{ !endsWith(github.actor, '[bot]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: "stable"
+      - uses: projectdiscovery/actions/golangci-lint/v2@v1
+
+  changes:
+    needs: lint
+    runs-on: ubuntu-latest
+    outputs:
+      modules: ${{ steps.detect.outputs.modules }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Detect changed modules
+        id: detect
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE=${{ github.event.pull_request.base.sha }}
+            HEAD=${{ github.sha }}
+          else
+            # For push events, compare with previous commit
+            BASE=${{ github.event.before }}
+            HEAD=${{ github.sha }}
+          fi
+
+          # Find all directories with go.mod
+          modules=()
+          while IFS= read -r gomod; do
+            dir=$(dirname "$gomod")
+            if git diff --name-only "$BASE" "$HEAD" | grep -q "^${dir}/"; then
+              modules+=("$dir")
+            fi
+          done < <(find . -name 'go.mod' -type f | sed 's|^\./||' | sort -r)
+
+          json=$(printf '%s\n' "${modules[@]}" | jq -R . | jq -s -c .)
+          echo "modules=$json" >> "$GITHUB_OUTPUT"
+          echo "Changed modules: $json"
+
+  tests:
+    needs: changes
+    if: ${{ needs.changes.outputs.modules != '[]' && needs.changes.outputs.modules != '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        module: ${{ fromJSON(needs.changes.outputs.modules) }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ matrix.module }}/go.mod
+          cache-dependency-path: ${{ matrix.module }}/go.sum
+      - run: go test -v -race .
+        working-directory: ${{ matrix.module }}
