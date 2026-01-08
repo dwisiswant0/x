@@ -1,0 +1,105 @@
+name: tests
+
+on:
+  push:
+    branches: ["master"]
+    paths:
+      - '**.go'
+      - '**.mod'
+  pull_request:
+    paths:
+      - '**.go'
+      - '**.mod'
+  workflow_dispatch: {}
+
+jobs:
+  changes:
+    if: ${{ !endsWith(github.actor, '[bot]') }}
+    runs-on: ubuntu-latest
+    outputs:
+      modules: ${{ steps.detect.outputs.modules }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Detect changed modules
+        id: detect
+        run: |
+          set -euo pipefail
+
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+            HEAD="${{ github.sha }}"
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            BASE="${{ github.event.before }}"
+            HEAD="${{ github.sha }}"
+            # Handle null SHA (first push or force push)
+            if [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
+              BASE="HEAD~1"
+            fi
+          else
+            # workflow_dispatch or other events: run all modules
+            echo "modules=$(find . -name 'go.mod' -type f -exec dirname {} \; | sed 's|^\./||' | sort -r | jq -R . | jq -s -c .)" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Comparing $BASE..$HEAD"
+          git diff --name-only "$BASE" "$HEAD" || true
+
+          # Find all directories with go.mod
+          modules=()
+          while IFS= read -r gomod; do
+            dir=$(dirname "$gomod")
+            # Check if any file in this module directory changed
+            if git diff --name-only "$BASE" "$HEAD" | grep -qE "^${dir}/"; then
+              echo "Module changed: $dir"
+              modules+=("$dir")
+            fi
+          done < <(find . -name 'go.mod' -type f | sed 's|^\./||' | sort -r)
+
+          if [ ${#modules[@]} -eq 0 ]; then
+            echo "modules=[]" >> "$GITHUB_OUTPUT"
+            echo "No modules changed"
+          else
+            json=$(printf '%s\n' "${modules[@]}" | jq -R . | jq -s -c .)
+            echo "modules=$json" >> "$GITHUB_OUTPUT"
+            echo "Changed modules: $json"
+          fi
+
+  lint:
+    needs: changes
+    if: ${{ needs.changes.outputs.modules != '[]' && needs.changes.outputs.modules != '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        module: ${{ fromJSON(needs.changes.outputs.modules) }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "stable"
+      - run: |
+          echo "Running golangci-lint on module: ${{ matrix.module }}"
+          echo "${{ needs.changes.outputs.modules }}"
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: "latest"
+          working-directory: ${{ matrix.module }}
+
+  tests:
+    needs: [changes, lint]
+    if: ${{ needs.changes.outputs.modules != '[]' && needs.changes.outputs.modules != '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        module: ${{ fromJSON(needs.changes.outputs.modules) }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ matrix.module }}/go.mod
+          cache-dependency-path: ${{ matrix.module }}/go.sum
+      - run: go test -v -race ./...
+        working-directory: ${{ matrix.module }}
