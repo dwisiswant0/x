@@ -1,0 +1,6 @@
+gctuner
+Copyright 2026 Dwi Siswanto
+
+This module contains code forked from github.com/bytedance/gopkg/util/gctuner.
+
+The upstream code is licensed under the Apache License, Version 2.0.
