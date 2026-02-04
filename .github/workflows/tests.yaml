@@ -94,7 +94,8 @@ jobs:
       fail-fast: false
       matrix:
         module: ${{ fromJSON(needs.changes.outputs.modules) }}
-    runs-on: ubuntu-latest
+        runner: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v5
