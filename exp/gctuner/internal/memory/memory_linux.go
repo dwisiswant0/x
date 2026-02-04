@@ -39,9 +39,6 @@ func sysFreeMemory() uint64 {
 	}
 
 	freeMem := readMemInfoValue("MemAvailable")
-	if freeMem == 0 {
-		freeMem = readMemInfoValue("MemFree")
-	}
 
 	return freeMem
 }

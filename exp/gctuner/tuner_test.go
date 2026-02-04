@@ -2,6 +2,8 @@ package gctuner
 
 import (
 	"runtime"
+	"runtime/debug"
+	"sync"
 	"testing"
 )
 
@@ -152,5 +154,70 @@ func TestCalcGCPercent(t *testing.T) {
 
 	if calcGCPercent(5*gb, 4*gb) != minGCPercent {
 		t.Fatalf("expected min gc percent %d for (5gb,4gb)", minGCPercent)
+	}
+}
+
+func TestTunerSetGetThresholdAndGCPercent(t *testing.T) {
+	cleanup := saveAndResetState(t)
+	defer cleanup()
+
+	prev := debug.SetGCPercent(100)
+	defer debug.SetGCPercent(prev)
+
+	tn := newTuner(1024)
+	defer tn.stop()
+
+	if got := tn.getThreshold(); got != 1024 {
+		t.Fatalf("expected threshold 1024, got %d", got)
+	}
+
+	tn.setThreshold(2048)
+	if got := tn.getThreshold(); got != 2048 {
+		t.Fatalf("expected threshold 2048, got %d", got)
+	}
+
+	old := tn.setGCPercent(150)
+	if old != 100 {
+		t.Fatalf("expected previous gc percent 100, got %d", old)
+	}
+
+	if got := tn.getGCPercent(); got != 150 {
+		t.Fatalf("expected gc percent 150, got %d", got)
+	}
+}
+
+func TestGetGCPercentWhenDisabled(t *testing.T) {
+	cleanup := saveAndResetState(t)
+	defer cleanup()
+
+	if err := Enable(0); err != nil {
+		t.Fatalf("unexpected error disabling tuner: %v", err)
+	}
+	if globalTuner != nil {
+		globalTuner.stop()
+		globalTuner = nil
+	}
+
+	defaultGCPercent = 123
+	defaultGCOnce = sync.Once{}
+	defaultGCOnce.Do(func() {})
+	if got := GetGCPercent(); got != 123 {
+		t.Fatalf("expected gc percent 123 when disabled, got %d", got)
+	}
+}
+
+func TestGetGCPercentWhenEnabled(t *testing.T) {
+	cleanup := saveAndResetState(t)
+	defer cleanup()
+
+	tn := newTuner(4096)
+	defer tn.stop()
+
+	prev := tn.setGCPercent(222)
+	defer debug.SetGCPercent(int(prev))
+
+	globalTuner = tn
+	if got := GetGCPercent(); got != 222 {
+		t.Fatalf("expected gc percent 222 when enabled, got %d", got)
 	}
 }
