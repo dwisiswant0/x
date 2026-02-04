@@ -99,8 +99,15 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
+        id: setup-go-from-mod
+        continue-on-error: true
         with:
           go-version-file: ${{ matrix.module }}/go.mod
+          cache-dependency-path: ${{ matrix.module }}/go.sum
+      - uses: actions/setup-go@v6
+        if: ${{ steps.setup-go-from-mod.outcome == 'failure' }}
+        with:
+          go-version: "stable"
           cache-dependency-path: ${{ matrix.module }}/go.sum
       - run: go test -v -race ./...
         working-directory: ${{ matrix.module }}
