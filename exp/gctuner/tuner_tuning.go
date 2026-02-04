@@ -1,6 +1,6 @@
 // nolint
-//go:build !go1.19
-// +build !go1.19
+//go:build go1.19
+// +build go1.19
 
 package gctuner
 
@@ -15,5 +15,8 @@ func (t *tuner) tuning() {
 		return
 	}
 
+	setMemoryLimit(threshold)
+
+	// keep adjusting GOGC to cooperate with memory limit
 	t.setGCPercent(calcGCPercent(inuse, threshold))
 }

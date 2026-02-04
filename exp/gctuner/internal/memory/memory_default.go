@@ -1,6 +1,6 @@
 // nolint
-//go:build !linux
-// +build !linux
+//go:build !linux && !darwin && !windows && !freebsd && !dragonfly && !netbsd && !openbsd
+// +build !linux,!darwin,!windows,!freebsd,!dragonfly,!netbsd,!openbsd
 
 package memory
 
