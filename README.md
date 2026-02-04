@@ -2,6 +2,16 @@
 
 A collection of Go hacks maintained by [**@dwisiswant0**](https://github.com/dwisiswant0).
 
+## Catalogs
+
+- [cast](cast): functions to convert between different types.
+- [exp](exp): contains experimental and/or unstable APIs.
+	- [exp/file](exp/file): an `os.File`-compatible API that prefers memory-mapped.
+	- [exp/gctuner](exp/gctuner): a lightweight GC tuning helper based on a heap.
+- [hash/wyhash](hash/wyhash): a Go implementation of the wyhash non-cryptographic.
+- [json](json): fast JSON encoding and decoding functionality.
+- [regexp](regexp): selects the fastest regex engine available for a pattern.
+
 ## Install
 
 > [!NOTE]
