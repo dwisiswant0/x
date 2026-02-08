@@ -2,7 +2,7 @@
 //go:build !linux
 // +build !linux
 
-package sandboxec
+package access
 
 // Linux-only package; this stub keeps `go test ./...` non-empty on other OSes.
 
