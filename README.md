@@ -8,6 +8,7 @@ A collection of Go hacks maintained by [**@dwisiswant0**](https://github.com/dwi
 - [exp](exp): contains experimental and/or unstable APIs.
 	- [exp/file](exp/file): an `os.File`-compatible API that prefers memory-mapped.
 	- [exp/gctuner](exp/gctuner): a lightweight GC tuning helper based on a heap.
+	- [exp/os/sandboxec](exp/os/sandboxec): wraps os/exec with Landlock policy enforcement.
 - [hash/wyhash](hash/wyhash): a Go implementation of the wyhash non-cryptographic.
 - [json](json): fast JSON encoding and decoding functionality.
 - [regexp](regexp): selects the fastest regex engine available for a pattern.
