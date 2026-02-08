@@ -10,7 +10,13 @@ if [[ ! -f "${readme}" ]]; then
 fi
 
 # Collect module directories (relative to repo root).
-mapfile -t module_dirs < <(find "${repo_root}" -name go.mod -type f -print0 | xargs -0 -n1 dirname | sed "s|^${repo_root}/||" | sort)
+# Normalize both "${repo_root}" and "${repo_root}/" to an empty prefix.
+mapfile -t module_dirs < <(
+  find "${repo_root}" -name go.mod -type f -print0 |
+    xargs -0 -n1 dirname |
+    sed -E "s#^${repo_root}(/|$)##" |
+    sort
+)
 
 if [[ ${#module_dirs[@]} -eq 0 ]]; then
   echo "No modules found (go.mod)." >&2
