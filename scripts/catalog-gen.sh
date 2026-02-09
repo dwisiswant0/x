@@ -90,7 +90,7 @@ for dir in "${top_level_sorted[@]}"; do
   pkg_link=$(get_pkg_link "${dir}")
   pkg_suffix=""
   if [[ -n "${pkg_link}" ]]; then
-    pkg_suffix=" [docs](${pkg_link})"
+    pkg_suffix=" [[docs](${pkg_link})]"
   fi
   if [[ -n "${desc}" ]]; then
     catalogs_lines+=("- [${dir}](${dir}): ${desc}${pkg_suffix}")
@@ -104,7 +104,7 @@ for dir in "${top_level_sorted[@]}"; do
       child_pkg_link=$(get_pkg_link "${child}")
       child_pkg_suffix=""
       if [[ -n "${child_pkg_link}" ]]; then
-        child_pkg_suffix=" [docs](${child_pkg_link})"
+        child_pkg_suffix=" [[docs](${child_pkg_link})]"
       fi
       if [[ -n "${child_desc}" ]]; then
         catalogs_lines+=("\t- [${child}](${child}): ${child_desc}${child_pkg_suffix}")
