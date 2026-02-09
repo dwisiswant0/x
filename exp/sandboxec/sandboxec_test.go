@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"go.dw1.io/x/exp/os/sandboxec/access"
+	"go.dw1.io/x/exp/sandboxec/access"
 )
 
 func runHelper(t *testing.T, scenario string, env map[string]string) string {

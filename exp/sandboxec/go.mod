@@ -1,4 +1,4 @@
-module go.dw1.io/x/exp/os/sandboxec
+module go.dw1.io/x/exp/sandboxec
 
 go 1.24.0
 

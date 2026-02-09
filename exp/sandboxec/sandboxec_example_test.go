@@ -7,8 +7,8 @@ package sandboxec_test
 import (
 	"fmt"
 
-	"go.dw1.io/x/exp/os/sandboxec"
-	"go.dw1.io/x/exp/os/sandboxec/access"
+	"go.dw1.io/x/exp/sandboxec"
+	"go.dw1.io/x/exp/sandboxec/access"
 )
 
 func ExampleSandboxec_minimalReadOnlyExecution() {

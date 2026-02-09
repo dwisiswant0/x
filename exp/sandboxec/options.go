@@ -9,7 +9,7 @@ import (
 
 	"github.com/landlock-lsm/go-landlock/landlock"
 	"github.com/landlock-lsm/go-landlock/landlock/syscall"
-	"go.dw1.io/x/exp/os/sandboxec/access"
+	"go.dw1.io/x/exp/sandboxec/access"
 )
 
 // Option configures a Sandboxec instance.

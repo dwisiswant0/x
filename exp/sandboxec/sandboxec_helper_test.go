@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	"go.dw1.io/x/exp/os/sandboxec/access"
+	"go.dw1.io/x/exp/sandboxec/access"
 )
 
 func TestHelperProcess(t *testing.T) {
