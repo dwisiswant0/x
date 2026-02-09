@@ -111,3 +111,15 @@ jobs:
           cache-dependency-path: ${{ matrix.module }}/go.sum
       - run: go test -v -race ./...
         working-directory: ${{ matrix.module }}
+
+  go-getter:
+    needs: [changes, lint, tests]
+    if: ${{ github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "stable"
+      - uses: oven-sh/setup-bun@v2
+      - run: bun run scripts/go-getter.js
