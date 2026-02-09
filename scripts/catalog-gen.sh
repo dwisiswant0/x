@@ -49,6 +49,26 @@ get_desc() {
   echo "${desc}"
 }
 
+# Build a docs link from the module path in go.mod.
+get_pkg_link() {
+  local dir="$1"
+  local gomod="${repo_root}/${dir}/go.mod"
+
+  if [[ ! -f "${gomod}" ]]; then
+    echo ""
+    return 0
+  fi
+
+  local mod
+  mod=$(awk '/^module[[:space:]]+/ {print $2; exit}' "${gomod}")
+  if [[ -z "${mod}" ]]; then
+    echo ""
+    return 0
+  fi
+
+  echo "https://${mod}?godoc=1"
+}
+
 # Build catalogs markdown.
 exp_children=()
 top_level=()
@@ -67,19 +87,29 @@ IFS=$'\n' read -r -d '' -a exp_children_sorted < <(printf '%s\n' "${exp_children
 catalogs_lines=()
 for dir in "${top_level_sorted[@]}"; do
   desc=$(get_desc "${dir}")
+  pkg_link=$(get_pkg_link "${dir}")
+  pkg_suffix=""
+  if [[ -n "${pkg_link}" ]]; then
+    pkg_suffix=" [docs](${pkg_link})"
+  fi
   if [[ -n "${desc}" ]]; then
-    catalogs_lines+=("- [${dir}](${dir}): ${desc}")
+    catalogs_lines+=("- [${dir}](${dir}): ${desc}${pkg_suffix}")
   else
-    catalogs_lines+=("- [${dir}](${dir})")
+    catalogs_lines+=("- [${dir}](${dir})${pkg_suffix}")
   fi
 
   if [[ "${dir}" == "exp" && ${#exp_children_sorted[@]} -gt 0 ]]; then
     for child in "${exp_children_sorted[@]}"; do
       child_desc=$(get_desc "${child}")
+      child_pkg_link=$(get_pkg_link "${child}")
+      child_pkg_suffix=""
+      if [[ -n "${child_pkg_link}" ]]; then
+        child_pkg_suffix=" [docs](${child_pkg_link})"
+      fi
       if [[ -n "${child_desc}" ]]; then
-        catalogs_lines+=("\t- [${child}](${child}): ${child_desc}")
+        catalogs_lines+=("\t- [${child}](${child}): ${child_desc}${child_pkg_suffix}")
       else
-        catalogs_lines+=("\t- [${child}](${child})")
+        catalogs_lines+=("\t- [${child}](${child})${child_pkg_suffix}")
       fi
     done
   fi
