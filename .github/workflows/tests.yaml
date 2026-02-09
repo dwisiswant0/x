@@ -114,7 +114,11 @@ jobs:
 
   go-getter:
     needs: [changes, lint, tests]
-    if: ${{ github.event_name == 'push' }}
+    if: ${{ github.event_name == 'push' && needs.changes.outputs.modules != '[]' && needs.changes.outputs.modules != '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        module: ${{ fromJSON(needs.changes.outputs.modules) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -122,4 +126,4 @@ jobs:
         with:
           go-version: "stable"
       - uses: oven-sh/setup-bun@v2
-      - run: bun run scripts/go-getter.js
+      - run: bun run scripts/go-getter.js ${{ matrix.module }}

@@ -51,6 +51,16 @@ async function listModules() {
   return modules.sort();
 }
 
+async function moduleFromDir(moduleDir) {
+  const goModPath = path.join(repoRoot, moduleDir, "go.mod");
+  const content = await fsp.readFile(goModPath, "utf8");
+  const match = content.match(/^module\s+(.+)\s*$/m);
+  if (!match || !match[1]) {
+    throw new Error(`module directive not found in ${goModPath}`);
+  }
+  return match[1].trim();
+}
+
 function exec(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
@@ -82,61 +92,62 @@ function exec(command, args, options = {}) {
 }
 
 async function run() {
+  const moduleArgs = process.argv.slice(2);
   const [commitSha, modules] = await Promise.all([
     getCommitSha(),
-    listModules(),
+    moduleArgs.length > 0
+      ? Promise.all(moduleArgs.map((dir) => moduleFromDir(dir)))
+      : listModules(),
   ]);
-
-  log(`commit sha: ${commitSha}`);
-  log(`modules found: ${modules.length}`);
 
   if (modules.length === 0) {
     console.log("No go.mod files found.");
     return;
   }
 
-  const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "go-getter-"));
-  log(`working dir: ${tmpDir}`);
-  try {
-    await exec("go", ["mod", "init", "go-getter-temp"], { cwd: tmpDir });
-
-    const tasks = modules.map((mod) => {
-      const spec = `${mod}@${commitSha}`;
-      log(`go get ${spec}`);
-      return exec("go", ["get", spec], { cwd: tmpDir })
-        .then((result) => ({ mod, result }))
-        .catch((error) => ({ mod, error }));
-    });
-
-    const results = await Promise.all(tasks);
-
-    let failed = false;
-    for (const entry of results) {
-      if (entry.error) {
-        failed = true;
-        console.error(`go get failed for ${entry.mod}`);
-        if (entry.error.stderr) {
-          console.error(entry.error.stderr.trim());
-        }
-        continue;
+  const tasks = modules.map((mod) => {
+    const spec = `${mod}@${commitSha}`;
+    return (async () => {
+      const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "go-getter-"));
+      try {
+        await exec("go", ["mod", "init", "go-getter-temp"], { cwd: tmpDir });
+        log(`trying ${spec}...`);
+        const result = await exec("go", ["get", "-v", spec], { cwd: tmpDir });
+        return { mod, result };
+      } catch (error) {
+        return { mod, error };
+      } finally {
+        log(`cleaning up ${tmpDir}`);
+        await fsp.rm(tmpDir, { recursive: true, force: true });
       }
-      if (entry.result.stdout.trim()) {
-        console.log(entry.result.stdout.trim());
+    })();
+  });
+
+  const results = await Promise.all(tasks);
+
+  let failed = false;
+  for (const entry of results) {
+    if (entry.error) {
+      failed = true;
+      console.error(`go get failed for ${entry.mod}`);
+      if (entry.error.stderr) {
+        console.error(entry.error.stderr.trim());
       }
-      if (entry.result.stderr.trim()) {
-        console.error(entry.result.stderr.trim());
-      }
+      continue;
     }
-
-    if (failed) {
-      log("one or more modules failed");
-      process.exitCode = 1;
-    } else {
-      log("all modules fetched successfully");
+    if (entry.result.stdout.trim()) {
+      console.log(entry.result.stdout.trim());
     }
-  } finally {
-    log(`cleaning up ${tmpDir}`);
-    await fsp.rm(tmpDir, { recursive: true, force: true });
+    if (entry.result.stderr.trim()) {
+      console.error(entry.result.stderr.trim());
+    }
+  }
+
+  if (failed) {
+    log("one or more modules failed");
+    process.exitCode = 1;
+  } else {
+    log("all modules fetched successfully");
   }
 }
 
