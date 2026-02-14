@@ -581,7 +581,7 @@ func helperCurlDenied() error {
 	if isPermissionDenied(err) {
 		return nil
 	}
-	if strings.Contains(outputLower, "could not connect to server") || strings.Contains(outputLower, "connection refused") {
+	if strings.Contains(outputLower, "could not connect to server") || strings.Contains(outputLower, "couldn't connect to server") || strings.Contains(outputLower, "connection refused") {
 		return nil
 	}
 	return fmt.Errorf("unexpected curl denial: %v: %s", err, strings.TrimSpace(string(output)))
@@ -637,7 +637,7 @@ func helperCurlNoNetworkRulesDenied() error {
 	if strings.Contains(outputLower, "permission denied") || strings.Contains(outputLower, "operation not permitted") || isPermissionDenied(err) {
 		return nil
 	}
-	if strings.Contains(outputLower, "could not connect to server") || strings.Contains(outputLower, "failed to connect") || strings.Contains(outputLower, "connection refused") {
+	if strings.Contains(outputLower, "could not connect to server") || strings.Contains(outputLower, "couldn't connect to server") || strings.Contains(outputLower, "failed to connect") || strings.Contains(outputLower, "connection refused") {
 		return nil
 	}
 
