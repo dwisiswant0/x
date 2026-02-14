@@ -101,3 +101,7 @@ func TestCurlAllowed(t *testing.T) {
 func TestCurlDenied(t *testing.T) {
 	runHelper(t, "curl-denied", nil)
 }
+
+func TestCurlNoNetworkRulesDenied(t *testing.T) {
+	runHelper(t, "curl-no-net-rules-denied", nil)
+}

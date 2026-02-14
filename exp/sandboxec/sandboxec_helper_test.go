@@ -62,6 +62,8 @@ func TestHelperProcess(t *testing.T) {
 		err = helperCurlAllowed()
 	case "curl-denied":
 		err = helperCurlDenied()
+	case "curl-no-net-rules-denied":
+		err = helperCurlNoNetworkRulesDenied()
 	default:
 		fmt.Fprintf(os.Stderr, "unknown scenario: %s\n", scenario)
 		os.Exit(2)
@@ -583,6 +585,63 @@ func helperCurlDenied() error {
 		return nil
 	}
 	return fmt.Errorf("unexpected curl denial: %v: %s", err, strings.TrimSpace(string(output)))
+}
+
+func helperCurlNoNetworkRulesDenied() error {
+	curlPath, err := exec.LookPath("curl")
+	if err != nil {
+		return fmt.Errorf("SKIP: curl not available")
+	}
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = listener.Close()
+	}()
+
+	port := listener.Addr().(*net.TCPAddr).Port
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "ok")
+	})}
+	go func() {
+		_ = server.Serve(listener)
+	}()
+	defer func() {
+		_ = server.Close()
+	}()
+
+	options := []Option{
+		WithABI(6),
+		WithFSRule("/etc", access.FS_READ),
+	}
+	options = append(options, curlAccessOptions(curlPath)...)
+
+	sb := newSandboxWithBaseExec(options...)
+	url := fmt.Sprintf("http://127.0.0.1:%d/", port)
+	cmd := sb.Command(curlPath, "-sS", "--connect-timeout", "1", "--max-time", "2", "-o", "/dev/null", url)
+	if cmd.Err != nil {
+		if isLandlockSkip(cmd.Err) {
+			return fmt.Errorf("SKIP: landlock unavailable: %v", cmd.Err)
+		}
+		return fmt.Errorf("enforce failed: %w", cmd.Err)
+	}
+
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		return fmt.Errorf("expected curl to be denied with no network rules, but request succeeded")
+	}
+
+	outputLower := strings.ToLower(string(output))
+	if strings.Contains(outputLower, "permission denied") || strings.Contains(outputLower, "operation not permitted") || isPermissionDenied(err) {
+		return nil
+	}
+	if strings.Contains(outputLower, "could not connect to server") || strings.Contains(outputLower, "failed to connect") || strings.Contains(outputLower, "connection refused") {
+		return nil
+	}
+
+	return fmt.Errorf("unexpected curl denial mode: %v: %s", err, strings.TrimSpace(string(output)))
 }
 
 func runWithTimeout(useSandbox bool) error {

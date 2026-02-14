@@ -138,16 +138,20 @@ func (s *Sandboxec) enforce() error {
 		}
 	}
 
-	if hasNetRules {
+	// Landlock ABI V1-V3 do not support network rules, so only attempt to apply
+	// them if the configured ABI is V4+.
+	if s.cfg.abi >= 4 {
 		var rules []landlock.Rule
 
-		for _, rule := range s.cfg.netRules {
-			if rule.rights&access.NETWORK_BIND_TCP != 0 {
-				rules = append(rules, landlock.BindTCP(rule.port))
-			}
+		if hasNetRules {
+			for _, rule := range s.cfg.netRules {
+				if rule.rights&access.NETWORK_BIND_TCP != 0 {
+					rules = append(rules, landlock.BindTCP(rule.port))
+				}
 
-			if rule.rights&access.NETWORK_CONNECT_TCP != 0 {
-				rules = append(rules, landlock.ConnectTCP(rule.port))
+				if rule.rights&access.NETWORK_CONNECT_TCP != 0 {
+					rules = append(rules, landlock.ConnectTCP(rule.port))
+				}
 			}
 		}
 
