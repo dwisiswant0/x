@@ -46,6 +46,14 @@ _ = cmd.Run()
 
 `sandboxec.WithBestEffort()` allows your program to run on kernels with older or missing Landlock support. In best-effort mode, enforcement may be partial or absent, so treat it as a compatibility fallback rather than a security boundary.
 
+## Network policy semantics
+
+- On Landlock ABI V4+, network access is restricted with a deny-by-default model.
+- `WithNetworkRule` explicitly allowlists TCP `bind(2)` / `connect(2)` access for selected ports.
+- If you set no network rules on ABI V4+, TCP bind/connect are denied.
+- On ABI V1-V3, Landlock does not provide TCP bind/connect restrictions.
+- In best-effort mode, kernel limitations may relax or disable enforcement.
+
 ## Landlock limitations and requirements
 
 - Landlock is Linux-only and requires kernel support.
@@ -61,11 +69,20 @@ _ = cmd.Run()
 | Kernel | 5.13+ for Landlock V1, newer for higher ABIs |
 | ABI | 1-6 (selected with WithABI) |
 
+### Kernel capability guide
+
+| Capability | Landlock ABI | Typical minimum kernel |
+| --- | --- | --- |
+| Filesystem restrictions | V1+ | 5.13+ |
+| TCP bind/connect restrictions | V4+ | 6.7+ |
+| Scoped IPC restrictions | V6+ | newer kernels only |
+
 ## Notes
 
 - `sandboxec.Command` and `sandboxec.CommandContext` mirror `exec.Command` behavior.
 - Path lookup and `exec.ErrDot` behavior are preserved.
 - Use `WithIgnoreIfMissing` to gracefully allow optional paths.
+- Without `WithBestEffort`, unsupported requested ABI fails closed with an error.
 
 ## Filesystem options
 

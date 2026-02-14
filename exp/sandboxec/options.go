@@ -96,7 +96,8 @@ func WithABI(version int) Option {
 // WithBestEffort enables best-effort Landlock enforcement.
 //
 // When enabled, unsupported Landlock ABIs or missing kernel support are ignored
-// instead of causing enforcement to fail.
+// instead of causing enforcement to fail. This may weaken least-privilege
+// guarantees (including network restrictions) on unsupported kernels.
 func WithBestEffort() Option {
 	return func(cfg *config) error {
 		cfg.bestEffort = true
@@ -142,6 +143,9 @@ func WithFSRule(path string, rights access.FS) Option {
 //
 // Rights control TCP bind and connect access for the specified port. Network
 // rules require Landlock ABI V4+.
+//
+// On ABI V4+, network policy is deny-by-default for TCP bind/connect;
+// WithNetworkRule explicitly allowlists ports.
 func WithNetworkRule(port uint16, rights access.Network) Option {
 	return func(cfg *config) error {
 		if rights == 0 {
