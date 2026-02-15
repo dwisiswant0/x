@@ -10,6 +10,7 @@ import (
 	"github.com/landlock-lsm/go-landlock/landlock"
 	"github.com/landlock-lsm/go-landlock/landlock/syscall"
 	"go.dw1.io/x/exp/sandboxec/access"
+	"go.dw1.io/x/exp/sandboxec/internal/runtime"
 )
 
 // Option configures a Sandboxec instance.
@@ -164,6 +165,31 @@ func WithNetworkRule(port uint16, rights access.Network) Option {
 func WithRestrictScoped() Option {
 	return func(cfg *config) error {
 		cfg.restrictScoped = true
+
+		return nil
+	}
+}
+
+// WithUnsafeHostRuntime allows [access.FS_READ_EXEC] access to host runtime paths.
+//
+// It grants read/execute rights to directories from PATH and the system
+// dynamic linker search configuration. This is intended for compatibility with
+// host-provided runtimes and shared libraries, and may broaden the sandbox
+// attack surface.
+func WithUnsafeHostRuntime() Option {
+	return func(cfg *config) error {
+		var dirs []string
+
+		dirs = append(dirs, runtime.GetPATHDirs()...)
+		libDirs, err := runtime.GetLinkerDirs()
+		if err != nil {
+			return fmt.Errorf("%w: failed to get linker directories: %v", ErrLandlockUnavailable, err)
+		}
+		dirs = append(dirs, libDirs...)
+
+		for _, dir := range dirs {
+			cfg.fsRules = append(cfg.fsRules, fsRule{path: dir, rights: access.FS_READ_EXEC})
+		}
 
 		return nil
 	}

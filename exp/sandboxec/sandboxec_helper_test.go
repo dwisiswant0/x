@@ -42,6 +42,12 @@ func TestHelperProcess(t *testing.T) {
 		err = helperBestEffort()
 	case "ignore-missing":
 		err = helperIgnoreMissing()
+	case "unsafe-host-runtime":
+		err = helperUnsafeHostRuntime()
+	case "unsafe-host-runtime-with":
+		err = helperUnsafeHostRuntimeWith()
+	case "unsafe-host-runtime-without":
+		err = helperUnsafeHostRuntimeWithout()
 	case "fs-restrict":
 		err = helperFSRestrict()
 	case "fs-restrict-child":
@@ -199,6 +205,90 @@ func helperIgnoreMissing() error {
 	cmd := sb.Command("/bin/true")
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("ignore-missing run failed: %w", err)
+	}
+
+	return nil
+}
+
+func helperUnsafeHostRuntime() error {
+	withoutOut, withoutErr := subprocess("unsafe-host-runtime-without", nil)
+	if withoutErr == nil {
+		return fmt.Errorf("SKIP: baseline succeeded without WithUnsafeHostRuntime on this environment")
+	}
+
+	withoutLower := strings.ToLower(string(withoutOut))
+	if !(strings.Contains(withoutLower, "permission denied") ||
+		strings.Contains(withoutLower, "operation not permitted") ||
+		strings.Contains(withoutLower, "error while loading shared libraries") ||
+		strings.Contains(withoutLower, "cannot open shared object file")) {
+		return fmt.Errorf("unexpected baseline failure without WithUnsafeHostRuntime: %v: %s", withoutErr, strings.TrimSpace(string(withoutOut)))
+	}
+
+	withOut, withErr := subprocess("unsafe-host-runtime-with", nil)
+	if withErr != nil {
+		return fmt.Errorf("expected success with WithUnsafeHostRuntime, got error: %v: %s", withErr, strings.TrimSpace(string(withOut)))
+	}
+
+	return nil
+}
+
+func helperUnsafeHostRuntimeWithout() error {
+	target, err := exec.LookPath("echo")
+	if err != nil {
+		return fmt.Errorf("SKIP: echo not available")
+	}
+
+	targetDir := filepath.Dir(target)
+
+	withoutHostRuntime := New(
+		WithFSRule(target, access.FS_READ_EXEC),
+		WithFSRule(targetDir, access.FS_READ_EXEC),
+		WithFSRule("/dev/null", access.FS_READ_WRITE),
+	)
+
+	withoutCmd := withoutHostRuntime.Command(target, "sandboxec")
+	if withoutCmd.Err != nil {
+		if isLandlockSkip(withoutCmd.Err) {
+			return fmt.Errorf("SKIP: landlock unavailable: %v", withoutCmd.Err)
+		}
+		return fmt.Errorf("enforce without host runtime failed: %w", withoutCmd.Err)
+	}
+
+	withoutOut, withoutErr := withoutCmd.CombinedOutput()
+	if withoutErr == nil {
+		return fmt.Errorf("expected failure without WithUnsafeHostRuntime")
+	}
+
+	return fmt.Errorf("without host runtime failed: %v: %s", withoutErr, strings.TrimSpace(string(withoutOut)))
+}
+
+func helperUnsafeHostRuntimeWith() error {
+	target, err := exec.LookPath("echo")
+	if err != nil {
+		return fmt.Errorf("SKIP: echo not available")
+	}
+
+	targetDir := filepath.Dir(target)
+
+	withHostRuntime := New(
+		WithIgnoreIfMissing(),
+		WithFSRule(target, access.FS_READ_EXEC),
+		WithFSRule(targetDir, access.FS_READ_EXEC),
+		WithFSRule("/dev/null", access.FS_READ_WRITE),
+		WithUnsafeHostRuntime(),
+	)
+
+	withCmd := withHostRuntime.Command(target, "sandboxec")
+	if withCmd.Err != nil {
+		if isLandlockSkip(withCmd.Err) {
+			return fmt.Errorf("SKIP: landlock unavailable: %v", withCmd.Err)
+		}
+		return fmt.Errorf("enforce with host runtime failed: %w", withCmd.Err)
+	}
+
+	withOut, withErr := withCmd.CombinedOutput()
+	if withErr != nil {
+		return fmt.Errorf("expected success with WithUnsafeHostRuntime, got error: %v: %s", withErr, strings.TrimSpace(string(withOut)))
 	}
 
 	return nil
