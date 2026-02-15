@@ -84,7 +84,9 @@ func parseLdConf(filename string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() {
+		_ = file.Close()
+	}()
 
 	var dirs []string
 	scanner := bufio.NewScanner(file)

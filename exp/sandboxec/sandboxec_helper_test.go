@@ -217,10 +217,10 @@ func helperUnsafeHostRuntime() error {
 	}
 
 	withoutLower := strings.ToLower(string(withoutOut))
-	if !(strings.Contains(withoutLower, "permission denied") ||
-		strings.Contains(withoutLower, "operation not permitted") ||
-		strings.Contains(withoutLower, "error while loading shared libraries") ||
-		strings.Contains(withoutLower, "cannot open shared object file")) {
+	if !strings.Contains(withoutLower, "permission denied") &&
+		!strings.Contains(withoutLower, "operation not permitted") &&
+		!strings.Contains(withoutLower, "error while loading shared libraries") &&
+		!strings.Contains(withoutLower, "cannot open shared object file") {
 		return fmt.Errorf("unexpected baseline failure without WithUnsafeHostRuntime: %v: %s", withoutErr, strings.TrimSpace(string(withoutOut)))
 	}
 
