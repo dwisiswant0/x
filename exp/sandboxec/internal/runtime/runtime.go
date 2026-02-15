@@ -35,8 +35,8 @@ func GetPATHDirs() []string {
 // GetLinkerDirs returns dynamic linker search directories for the host.
 //
 // It starts with existing common system defaults, then appends directories
-// defined in /etc/ld.so.conf (including nested include directives), while
-// preserving order and removing duplicates.
+// from LD_LIBRARY_PATH and /etc/ld.so.conf (including nested include
+// directives), while preserving order and removing duplicates.
 func GetLinkerDirs() ([]string, error) {
 	var dirs []string
 
@@ -52,6 +52,16 @@ func GetLinkerDirs() ([]string, error) {
 	for _, d := range stdDefaults {
 		if _, err := os.Stat(d); err == nil {
 			dirs = append(dirs, d)
+		}
+	}
+
+	for d := range strings.SplitSeq(os.Getenv("LD_LIBRARY_PATH"), ":") {
+		if d == "" {
+			continue
+		}
+
+		if _, err := os.Stat(d); err == nil {
+			dirs = appendUniq(dirs, d)
 		}
 	}
 

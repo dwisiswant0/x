@@ -32,6 +32,52 @@ func TestGetPATHDirs(t *testing.T) {
 }
 
 func TestGetLinkerDirs(t *testing.T) {
+	t.Run("includes LD_LIBRARY_PATH entries in order without duplicates", func(t *testing.T) {
+		dirA := t.TempDir()
+		dirB := t.TempDir()
+		nonExistent := dirA + "/does-not-exist"
+
+		t.Setenv("LD_LIBRARY_PATH", dirA+":"+dirB+":"+dirA+":"+nonExistent)
+
+		dirs, err := GetLinkerDirs()
+		if err != nil {
+			t.Fatalf("GetLinkerDirs returned error: %v", err)
+		}
+
+		idxA := -1
+		idxB := -1
+		for i, d := range dirs {
+			if d == dirA && idxA == -1 {
+				idxA = i
+			}
+			if d == dirB && idxB == -1 {
+				idxB = i
+			}
+			if d == nonExistent {
+				t.Fatalf("unexpected non-existent LD_LIBRARY_PATH dir in result: %q", d)
+			}
+		}
+
+		if idxA == -1 || idxB == -1 {
+			t.Fatalf("expected LD_LIBRARY_PATH dirs to be included: got %#v", dirs)
+		}
+
+		if idxA >= idxB {
+			t.Fatalf("expected LD_LIBRARY_PATH order to be preserved, got idxA=%d idxB=%d", idxA, idxB)
+		}
+
+		countA := 0
+		for _, d := range dirs {
+			if d == dirA {
+				countA++
+			}
+		}
+
+		if countA != 1 {
+			t.Fatalf("expected deduplicated dir %q once, got %d occurrences", dirA, countA)
+		}
+	})
+
 	dirs, err := GetLinkerDirs()
 	if err != nil {
 		t.Fatalf("GetLinkerDirs returned error: %v", err)
