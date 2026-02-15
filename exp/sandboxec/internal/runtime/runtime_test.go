@@ -6,6 +6,7 @@ package runtime
 
 import (
 	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -21,10 +22,35 @@ func TestGetPATHDirs(t *testing.T) {
 	})
 
 	t.Run("splits PATH by colon", func(t *testing.T) {
-		t.Setenv("PATH", "/usr/local/bin:/usr/bin:/bin")
+		dirA := t.TempDir()
+		dirB := t.TempDir()
+		t.Setenv("PATH", dirA+":"+dirB)
 
 		got := GetPATHDirs()
-		want := []string{"/usr/local/bin", "/usr/bin", "/bin"}
+		want := []string{dirA, dirB}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("unexpected PATH dirs: got %#v, want %#v", got, want)
+		}
+	})
+
+	t.Run("includes resolved executable symlink target directory", func(t *testing.T) {
+		binDir := t.TempDir()
+		targetDir := t.TempDir()
+		targetExe := filepath.Join(targetDir, "tool-bin")
+
+		if err := os.WriteFile(targetExe, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatalf("write target exe: %v", err)
+		}
+
+		linkPath := filepath.Join(binDir, "tool")
+		if err := os.Symlink(targetExe, linkPath); err != nil {
+			t.Fatalf("create symlink: %v", err)
+		}
+
+		t.Setenv("PATH", binDir)
+
+		got := GetPATHDirs()
+		want := []string{binDir, targetDir}
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("unexpected PATH dirs: got %#v, want %#v", got, want)
 		}
