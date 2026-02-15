@@ -88,4 +88,5 @@ _ = cmd.Run()
 
 - `WithFSRule` adds a filesystem rule for a path using `access.FS` helper masks.
 - `WithNetworkRule` adds a network rule for a port using `access.Network` masks.
+- `WithUnsafeHostRuntime` allowlists host runtime paths (PATH, LD_LIBRARY_PATH, and discovered shared-library directories) with `FS_READ_EXEC`; this is host-dependent and less strict than explicit rules.
 

@@ -14,16 +14,20 @@ import (
 	"go.dw1.io/x/exp/sandboxec/access"
 )
 
-func runHelper(t *testing.T, scenario string, env map[string]string) string {
-	t.Helper()
-
+func subprocess(scenario string, env map[string]string) ([]byte, error) {
 	cmd := exec.Command(os.Args[0], "-test.run=TestHelperProcess", "--")
 	cmd.Env = append(os.Environ(), "SANDBOXEC_HELPER=1", "SANDBOXEC_SCENARIO="+scenario)
 	for key, value := range env {
 		cmd.Env = append(cmd.Env, key+"="+value)
 	}
 
-	out, err := cmd.CombinedOutput()
+	return cmd.CombinedOutput()
+}
+
+func runHelper(t *testing.T, scenario string, env map[string]string) string {
+	t.Helper()
+
+	out, err := subprocess(scenario, env)
 	output := string(out)
 	if strings.Contains(output, "SKIP:") {
 		t.Skip(strings.TrimSpace(output))
@@ -68,6 +72,10 @@ func TestBestEffort(t *testing.T) {
 
 func TestIgnoreIfMissing(t *testing.T) {
 	runHelper(t, "ignore-missing", nil)
+}
+
+func TestWithUnsafeHostRuntimeIntegration(t *testing.T) {
+	runHelper(t, "unsafe-host-runtime", nil)
 }
 
 func TestFSRestrictions(t *testing.T) {
