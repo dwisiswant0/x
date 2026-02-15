@@ -11,10 +11,11 @@ import (
 	"strings"
 )
 
-// GetPATHDirs returns the entries from the PATH environment variable.
+// GetPATHDirs returns runtime-relevant directories discovered from PATH.
 //
-// It splits PATH using ':' and returns an empty slice when PATH is unset
-// or empty.
+// It includes existing PATH entries and resolved target directories for
+// executable files found inside those entries (e.g., symlinked launchers).
+// It returns an empty slice when PATH is unset or empty.
 func GetPATHDirs() []string {
 	var dirs []string
 
@@ -24,9 +25,58 @@ func GetPATHDirs() []string {
 	}
 
 	for dir := range strings.SplitSeq(pathEnv, ":") {
-		if _, err := os.Stat(dir); err == nil {
-			dirs = appendUniq(dirs, dir)
+		info, err := os.Stat(dir)
+		if err != nil || !info.IsDir() {
+			continue
 		}
+
+		dirs = appendUniq(dirs, dir)
+		targetDirs := getExecTargetDirs(dir)
+		dirs = appendUniq(dirs, targetDirs...)
+
+		resolvedDir, err := filepath.EvalSymlinks(dir)
+		if err == nil {
+			resolvedInfo, statErr := os.Stat(resolvedDir)
+			if statErr == nil && resolvedInfo.IsDir() {
+				dirs = appendUniq(dirs, resolvedDir)
+			}
+		}
+	}
+
+	return dirs
+}
+
+func getExecTargetDirs(pathDir string) []string {
+	entries, err := os.ReadDir(pathDir)
+	if err != nil {
+		return nil
+	}
+
+	var dirs []string
+
+	for _, entry := range entries {
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+
+		if info.IsDir() || info.Mode()&0o111 == 0 {
+			continue
+		}
+
+		entryPath := filepath.Join(pathDir, entry.Name())
+		resolvedPath, err := filepath.EvalSymlinks(entryPath)
+		if err != nil {
+			continue
+		}
+
+		targetDir := filepath.Dir(resolvedPath)
+		targetInfo, err := os.Stat(targetDir)
+		if err != nil || !targetInfo.IsDir() {
+			continue
+		}
+
+		dirs = appendUniq(dirs, targetDir)
 	}
 
 	return dirs
