@@ -6,6 +6,7 @@ package runtime
 
 import (
 	"bufio"
+	"iter"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,26 +23,18 @@ func GetPATHDirs() []string {
 	var dirs []string
 	seen := make(map[string]struct{})
 
-	pathEnv := os.Getenv("PATH")
-	if pathEnv == "" {
-		return dirs
-	}
-
-	for dir := range strings.SplitSeq(pathEnv, ":") {
-		info, err := os.Stat(dir)
-		if err != nil || !info.IsDir() {
-			continue
-		}
-
-		dirs = appendUniqWithSeen(dirs, seen, dir)
+	for _, dir := range splitEnvDirs("PATH") {
+		dirs = appendExistingDirUniq(dirs, seen, dir)
 		targetDirs := getExecTargetDirs(dir)
 		dirs = appendUniqWithSeen(dirs, seen, targetDirs...)
 
-		resolvedDir, err := filepath.EvalSymlinks(dir)
-		if err == nil {
-			resolvedInfo, statErr := os.Stat(resolvedDir)
-			if statErr == nil && resolvedInfo.IsDir() {
-				dirs = appendUniqWithSeen(dirs, seen, resolvedDir)
+		linfo, lerr := os.Lstat(dir)
+		if lerr == nil && linfo.Mode()&os.ModeSymlink != 0 {
+			resolvedDir, err := filepath.EvalSymlinks(dir)
+			if err == nil {
+				if resolvedInfo, statErr := os.Stat(resolvedDir); statErr == nil && resolvedInfo.IsDir() {
+					dirs = appendUniqWithSeen(dirs, seen, resolvedDir)
+				}
 			}
 		}
 	}
@@ -68,19 +61,11 @@ func GetLinkerDirs() ([]string, error) {
 	}
 
 	for _, d := range stdDefaults {
-		if _, err := os.Stat(d); err == nil {
-			dirs = appendUniqWithSeen(dirs, seen, d)
-		}
+		dirs = appendExistingDirUniq(dirs, seen, d)
 	}
 
-	for d := range strings.SplitSeq(os.Getenv("LD_LIBRARY_PATH"), ":") {
-		if d == "" {
-			continue
-		}
-
-		if _, err := os.Stat(d); err == nil {
-			dirs = appendUniqWithSeen(dirs, seen, d)
-		}
+	for _, d := range splitEnvDirs("LD_LIBRARY_PATH") {
+		dirs = appendExistingDirUniq(dirs, seen, d)
 	}
 
 	ldConfDirs, err := parseLdConf("/etc/ld.so.conf")
@@ -109,47 +94,17 @@ func GetLinkersFilesFromDirs(d ...string) ([]string, error) {
 	seenTargets := make(map[string]struct{})
 
 	for _, dir := range d {
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			continue
-		}
+		for file := range getExecutableFiles(dir) {
+			target := file.resolved
+			if target == "" {
+				target = file.candidate
+			}
 
-		for _, entry := range entries {
-			if entry.IsDir() {
+			if _, ok := seenTargets[target]; ok {
 				continue
 			}
-
-			candidate := filepath.Join(dir, entry.Name())
-			info, err := os.Stat(candidate)
-			if err != nil {
-				continue
-			}
-
-			if !info.Mode().IsRegular() || info.Mode()&0o111 == 0 {
-				continue
-			}
-
-			resolved := candidate
-			entryType := entry.Type()
-			isSymlink := entryType&os.ModeSymlink != 0
-			if !isSymlink && entryType == 0 {
-				if linfo, lerr := os.Lstat(candidate); lerr == nil {
-					isSymlink = linfo.Mode()&os.ModeSymlink != 0
-				}
-			}
-
-			if isSymlink {
-				if target, err := filepath.EvalSymlinks(candidate); err == nil {
-					resolved = target
-				}
-			}
-
-			if _, ok := seenTargets[resolved]; ok {
-				continue
-			}
-			seenTargets[resolved] = struct{}{}
-
-			files = append(files, candidate)
+			seenTargets[target] = struct{}{}
+			files = append(files, file.candidate)
 		}
 	}
 
@@ -160,53 +115,112 @@ func GetLinkersFilesFromDirs(d ...string) ([]string, error) {
 	return ldd.FList(files...)
 }
 
-func getExecTargetDirs(pathDir string) []string {
-	entries, err := os.ReadDir(pathDir)
-	if err != nil {
+type executableFile struct {
+	candidate string
+	isSymlink bool
+	resolved  string
+}
+
+func splitEnvDirs(envKey string) []string {
+	value := os.Getenv(envKey)
+	if value == "" {
 		return nil
 	}
 
-	var dirs []string
-	seen := make(map[string]struct{})
-
-	for _, entry := range entries {
-		info, err := entry.Info()
-		if err != nil {
+	dirs := make([]string, 0)
+	for dir := range strings.SplitSeq(value, ":") {
+		if dir == "" {
 			continue
 		}
-
-		if info.IsDir() || info.Mode()&0o111 == 0 {
-			continue
-		}
-
-		entryPath := filepath.Join(pathDir, entry.Name())
-
-		resolvedPath := entryPath
-		entryType := entry.Type()
-		isSymlink := entryType&os.ModeSymlink != 0
-		if !isSymlink && entryType == 0 {
-			if linfo, lerr := os.Lstat(entryPath); lerr == nil {
-				isSymlink = linfo.Mode()&os.ModeSymlink != 0
-			}
-		}
-
-		if isSymlink {
-			resolvedPath, err = filepath.EvalSymlinks(entryPath)
-			if err != nil {
-				continue
-			}
-		}
-
-		targetDir := filepath.Dir(resolvedPath)
-		targetInfo, err := os.Stat(targetDir)
-		if err != nil || !targetInfo.IsDir() {
-			continue
-		}
-
-		dirs = appendUniqWithSeen(dirs, seen, targetDir)
+		dirs = append(dirs, dir)
 	}
 
 	return dirs
+}
+
+func getExecTargetDirs(pathDir string) []string {
+	var dirs []string
+	seen := make(map[string]struct{})
+
+	for file := range getExecutableFiles(pathDir) {
+		if !file.isSymlink {
+			dirs = appendUniqWithSeen(dirs, seen, pathDir)
+			continue
+		}
+
+		if file.resolved == "" {
+			continue
+		}
+
+		targetDir := filepath.Dir(file.resolved)
+		dirs = appendExistingDirUniq(dirs, seen, targetDir)
+	}
+
+	return dirs
+}
+
+func getExecutableFiles(dir string) iter.Seq[executableFile] {
+	return func(yield func(executableFile) bool) {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return
+		}
+
+		for _, entry := range entries {
+			entryType := entry.Type()
+			if entryType.IsDir() {
+				continue
+			}
+			if entryType&os.ModeType != 0 && entryType&os.ModeSymlink == 0 && !entryType.IsRegular() {
+				continue
+			}
+
+			candidate := filepath.Join(dir, entry.Name())
+
+			isSymlink := entryType&os.ModeSymlink != 0
+			if !isSymlink && entryType == 0 {
+				if linfo, err := os.Lstat(candidate); err == nil {
+					isSymlink = linfo.Mode()&os.ModeSymlink != 0
+				}
+			}
+
+			var mode os.FileMode
+			if !isSymlink && entryType.IsRegular() {
+				info, err := entry.Info()
+				if err != nil {
+					continue
+				}
+				mode = info.Mode()
+			} else {
+				info, err := os.Stat(candidate)
+				if err != nil {
+					continue
+				}
+				mode = info.Mode()
+			}
+
+			if !mode.IsRegular() || mode&0o111 == 0 {
+				continue
+			}
+
+			resolved := candidate
+			if isSymlink {
+				if target, err := filepath.EvalSymlinks(candidate); err == nil {
+					resolved = target
+				} else {
+					resolved = ""
+				}
+			}
+
+			if !yield(executableFile{
+				candidate: candidate,
+				isSymlink: isSymlink,
+				resolved:  resolved,
+			}) {
+				return
+			}
+		}
+	}
 }
 
 // parseLdConf reads an ld.so.conf-style file and returns linker directories.
@@ -306,4 +320,17 @@ func appendUniqWithSeen[T1 comparable, T2 map[T1]struct{}](slice []T1, seen T2, 
 	}
 
 	return slice
+}
+
+func appendExistingDirUniq(dirs []string, seen map[string]struct{}, dir string) []string {
+	if dir == "" {
+		return dirs
+	}
+
+	info, err := os.Stat(dir)
+	if err != nil || !info.IsDir() {
+		return dirs
+	}
+
+	return appendUniqWithSeen(dirs, seen, dir)
 }
