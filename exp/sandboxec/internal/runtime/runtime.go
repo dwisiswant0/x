@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"go.dw1.io/x/exp/sandboxec/internal/ldd"
 )
 
 // GetPATHDirs returns runtime-relevant directories discovered from PATH.
@@ -18,6 +20,7 @@ import (
 // It returns an empty slice when PATH is unset or empty.
 func GetPATHDirs() []string {
 	var dirs []string
+	seen := make(map[string]struct{})
 
 	pathEnv := os.Getenv("PATH")
 	if pathEnv == "" {
@@ -30,53 +33,17 @@ func GetPATHDirs() []string {
 			continue
 		}
 
-		dirs = appendUniq(dirs, dir)
+		dirs = appendUniqWithSeen(dirs, seen, dir)
 		targetDirs := getExecTargetDirs(dir)
-		dirs = appendUniq(dirs, targetDirs...)
+		dirs = appendUniqWithSeen(dirs, seen, targetDirs...)
 
 		resolvedDir, err := filepath.EvalSymlinks(dir)
 		if err == nil {
 			resolvedInfo, statErr := os.Stat(resolvedDir)
 			if statErr == nil && resolvedInfo.IsDir() {
-				dirs = appendUniq(dirs, resolvedDir)
+				dirs = appendUniqWithSeen(dirs, seen, resolvedDir)
 			}
 		}
-	}
-
-	return dirs
-}
-
-func getExecTargetDirs(pathDir string) []string {
-	entries, err := os.ReadDir(pathDir)
-	if err != nil {
-		return nil
-	}
-
-	var dirs []string
-
-	for _, entry := range entries {
-		info, err := entry.Info()
-		if err != nil {
-			continue
-		}
-
-		if info.IsDir() || info.Mode()&0o111 == 0 {
-			continue
-		}
-
-		entryPath := filepath.Join(pathDir, entry.Name())
-		resolvedPath, err := filepath.EvalSymlinks(entryPath)
-		if err != nil {
-			continue
-		}
-
-		targetDir := filepath.Dir(resolvedPath)
-		targetInfo, err := os.Stat(targetDir)
-		if err != nil || !targetInfo.IsDir() {
-			continue
-		}
-
-		dirs = appendUniq(dirs, targetDir)
 	}
 
 	return dirs
@@ -89,6 +56,7 @@ func getExecTargetDirs(pathDir string) []string {
 // directives), while preserving order and removing duplicates.
 func GetLinkerDirs() ([]string, error) {
 	var dirs []string
+	seen := make(map[string]struct{})
 
 	stdDefaults := []string{
 		"/lib",
@@ -101,7 +69,7 @@ func GetLinkerDirs() ([]string, error) {
 
 	for _, d := range stdDefaults {
 		if _, err := os.Stat(d); err == nil {
-			dirs = append(dirs, d)
+			dirs = appendUniqWithSeen(dirs, seen, d)
 		}
 	}
 
@@ -111,7 +79,7 @@ func GetLinkerDirs() ([]string, error) {
 		}
 
 		if _, err := os.Stat(d); err == nil {
-			dirs = appendUniq(dirs, d)
+			dirs = appendUniqWithSeen(dirs, seen, d)
 		}
 	}
 
@@ -120,9 +88,125 @@ func GetLinkerDirs() ([]string, error) {
 		return nil, err
 	}
 
-	dirs = appendUniq(dirs, ldConfDirs...)
+	dirs = appendUniqWithSeen(dirs, seen, ldConfDirs...)
 
 	return dirs, nil
+}
+
+// GetLinkersFiles returns linker dependency files for one executable/library path.
+func GetLinkersFiles(f string) ([]string, error) {
+	if f == "" {
+		return nil, nil
+	}
+
+	return ldd.FList(f)
+}
+
+// GetLinkersFilesFromDirs returns linker dependency files for executable-like
+// files discovered in the provided directories.
+func GetLinkersFilesFromDirs(d ...string) ([]string, error) {
+	files := make([]string, 0)
+	seenTargets := make(map[string]struct{})
+
+	for _, dir := range d {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+
+			candidate := filepath.Join(dir, entry.Name())
+			info, err := os.Stat(candidate)
+			if err != nil {
+				continue
+			}
+
+			if !info.Mode().IsRegular() || info.Mode()&0o111 == 0 {
+				continue
+			}
+
+			resolved := candidate
+			entryType := entry.Type()
+			isSymlink := entryType&os.ModeSymlink != 0
+			if !isSymlink && entryType == 0 {
+				if linfo, lerr := os.Lstat(candidate); lerr == nil {
+					isSymlink = linfo.Mode()&os.ModeSymlink != 0
+				}
+			}
+
+			if isSymlink {
+				if target, err := filepath.EvalSymlinks(candidate); err == nil {
+					resolved = target
+				}
+			}
+
+			if _, ok := seenTargets[resolved]; ok {
+				continue
+			}
+			seenTargets[resolved] = struct{}{}
+
+			files = append(files, candidate)
+		}
+	}
+
+	if len(files) == 0 {
+		return nil, nil
+	}
+
+	return ldd.FList(files...)
+}
+
+func getExecTargetDirs(pathDir string) []string {
+	entries, err := os.ReadDir(pathDir)
+	if err != nil {
+		return nil
+	}
+
+	var dirs []string
+	seen := make(map[string]struct{})
+
+	for _, entry := range entries {
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+
+		if info.IsDir() || info.Mode()&0o111 == 0 {
+			continue
+		}
+
+		entryPath := filepath.Join(pathDir, entry.Name())
+
+		resolvedPath := entryPath
+		entryType := entry.Type()
+		isSymlink := entryType&os.ModeSymlink != 0
+		if !isSymlink && entryType == 0 {
+			if linfo, lerr := os.Lstat(entryPath); lerr == nil {
+				isSymlink = linfo.Mode()&os.ModeSymlink != 0
+			}
+		}
+
+		if isSymlink {
+			resolvedPath, err = filepath.EvalSymlinks(entryPath)
+			if err != nil {
+				continue
+			}
+		}
+
+		targetDir := filepath.Dir(resolvedPath)
+		targetInfo, err := os.Stat(targetDir)
+		if err != nil || !targetInfo.IsDir() {
+			continue
+		}
+
+		dirs = appendUniqWithSeen(dirs, seen, targetDir)
+	}
+
+	return dirs
 }
 
 // parseLdConf reads an ld.so.conf-style file and returns linker directories.
@@ -139,6 +223,8 @@ func parseLdConf(filename string) ([]string, error) {
 	}()
 
 	var dirs []string
+	seen := make(map[string]struct{})
+
 	scanner := bufio.NewScanner(file)
 
 	for scanner.Scan() {
@@ -164,7 +250,7 @@ func parseLdConf(filename string) ([]string, error) {
 
 				for _, d := range subDirs {
 					if _, err := os.Stat(d); err == nil {
-						dirs = appendUniq(dirs, d)
+						dirs = appendUniqWithSeen(dirs, seen, d)
 					}
 				}
 			}
@@ -172,7 +258,7 @@ func parseLdConf(filename string) ([]string, error) {
 			continue
 		}
 
-		dirs = appendUniq(dirs, line)
+		dirs = appendUniqWithSeen(dirs, seen, line)
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -186,7 +272,7 @@ func parseLdConf(filename string) ([]string, error) {
 // that already exist in slice.
 //
 // NOTE(dwisiswant0): Might be separated into a utility package if needed.
-func appendUniq[T comparable](slice []T, elems ...T) []T {
+func appendUniq[T comparable](slice []T, elems ...T) []T { // nolint
 	seen := make(map[T]struct{}, len(slice)+len(elems))
 
 	for _, v := range slice {
@@ -198,6 +284,25 @@ func appendUniq[T comparable](slice []T, elems ...T) []T {
 			seen[v] = struct{}{}
 			slice = append(slice, v)
 		}
+	}
+
+	return slice
+}
+
+// appendUniqWithSeen appends non-empty elems that are not in seen.
+//
+// The caller owns seen and should reuse it across calls to avoid repeated
+// allocations and re-scanning of the destination slice.
+//
+// NOTE(dwisiswant0): Might be separated into a utility package if needed.
+func appendUniqWithSeen[T1 comparable, T2 map[T1]struct{}](slice []T1, seen T2, elems ...T1) []T1 {
+	for _, v := range elems {
+		if _, ok := seen[v]; ok {
+			continue
+		}
+
+		seen[v] = struct{}{}
+		slice = append(slice, v)
 	}
 
 	return slice

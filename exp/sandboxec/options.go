@@ -172,23 +172,22 @@ func WithRestrictScoped() Option {
 
 // WithUnsafeHostRuntime allows [access.FS_READ_EXEC] access to host runtime paths.
 //
-// It grants read/execute rights to directories from PATH and the system
-// dynamic linker search configuration. This is intended for compatibility with
-// host-provided runtimes and shared libraries, and may broaden the sandbox
-// attack surface.
+// It grants read/execute rights to PATH-derived runtime targets and to
+// resolved shared-library dependency files discovered from executable entries.
+// This is intended for compatibility with host-provided runtimes and shared
+// libraries, and may broaden the sandbox attack surface.
 func WithUnsafeHostRuntime() Option {
 	return func(cfg *config) error {
-		var dirs []string
+		pathTargets := runtime.GetPATHDirs()
 
-		dirs = append(dirs, runtime.GetPATHDirs()...)
-		libDirs, err := runtime.GetLinkerDirs()
+		soFiles, err := runtime.GetLinkersFilesFromDirs(pathTargets...)
 		if err != nil {
-			return fmt.Errorf("%w: failed to get linker directories: %v", ErrLandlockUnavailable, err)
+			return fmt.Errorf("%w: failed to resolve runtime dependency files: %v", ErrLandlockUnavailable, err)
 		}
-		dirs = append(dirs, libDirs...)
+		pathTargets = append(pathTargets, soFiles...)
 
-		for _, dir := range dirs {
-			cfg.fsRules = append(cfg.fsRules, fsRule{path: dir, rights: access.FS_READ_EXEC})
+		for _, pathTarget := range pathTargets {
+			cfg.fsRules = append(cfg.fsRules, fsRule{path: pathTarget, rights: access.FS_READ_EXEC})
 		}
 
 		return nil

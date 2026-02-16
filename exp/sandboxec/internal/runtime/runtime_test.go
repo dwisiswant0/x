@@ -11,6 +11,110 @@ import (
 	"testing"
 )
 
+func TestPATHToSOFiles(t *testing.T) {
+	dirs := GetPATHDirs()
+	if len(dirs) == 0 {
+		return
+	}
+
+	soFiles, err := GetLinkersFilesFromDirs(dirs...)
+	if err != nil {
+		t.Fatalf("GetLinkersFilesFromDirs failed: %v", err)
+	}
+
+	t.Logf("discovered %d unique shared-library paths", len(soFiles))
+}
+
+func TestGetLinkersFiles(t *testing.T) {
+	t.Run("returns dependencies for dynamic executable", func(t *testing.T) {
+		candidates := []string{"/bin/sh", "/usr/bin/env", "/bin/ls"}
+
+		var target string
+		for _, candidate := range candidates {
+			if _, err := os.Stat(candidate); err == nil {
+				target = candidate
+				break
+			}
+		}
+
+		if target == "" {
+			t.Skip("no executable candidate found on this host")
+		}
+
+		deps, err := GetLinkersFiles(target)
+		if err != nil {
+			t.Fatalf("GetLinkersFiles returned error: %v", err)
+		}
+
+		if len(deps) == 0 {
+			t.Fatalf("expected at least one dependency for %q", target)
+		}
+	})
+
+	t.Run("returns empty for empty input", func(t *testing.T) {
+		deps, err := GetLinkersFiles("")
+		if err != nil {
+			t.Fatalf("GetLinkersFiles returned error: %v", err)
+		}
+		if len(deps) != 0 {
+			t.Fatalf("expected empty dependencies, got: %#v", deps)
+		}
+	})
+}
+
+func TestGetLinkersFilesFromDirs(t *testing.T) {
+	t.Run("returns dependencies from executable files in provided dirs", func(t *testing.T) {
+		dir := t.TempDir()
+
+		targetCandidates := []string{"/bin/sh", "/usr/bin/env", "/bin/ls"}
+
+		var src string
+		for _, candidate := range targetCandidates {
+			if _, err := os.Stat(candidate); err == nil {
+				src = candidate
+				break
+			}
+		}
+
+		if src == "" {
+			t.Skip("no executable candidate found on this host")
+		}
+
+		symlinkA := filepath.Join(dir, "tool-a")
+		symlinkB := filepath.Join(dir, "tool-b")
+		if err := os.Symlink(src, symlinkA); err != nil {
+			t.Fatalf("create symlinkA: %v", err)
+		}
+		if err := os.Symlink(src, symlinkB); err != nil {
+			t.Fatalf("create symlinkB: %v", err)
+		}
+
+		nonExec := filepath.Join(dir, "README.txt")
+		if err := os.WriteFile(nonExec, []byte("hello"), 0o644); err != nil {
+			t.Fatalf("write nonExec: %v", err)
+		}
+
+		deps, err := GetLinkersFilesFromDirs(dir)
+		if err != nil {
+			t.Fatalf("GetLinkersFilesFromDirs returned error: %v", err)
+		}
+
+		if len(deps) == 0 {
+			t.Fatalf("expected at least one dependency from dir %q", dir)
+		}
+	})
+
+	t.Run("returns empty when directories are unreadable or missing", func(t *testing.T) {
+		deps, err := GetLinkersFilesFromDirs(filepath.Join(t.TempDir(), "missing"))
+		if err != nil {
+			t.Fatalf("GetLinkersFilesFromDirs returned error: %v", err)
+		}
+		if len(deps) != 0 {
+			t.Fatalf("expected empty dependencies, got: %#v", deps)
+		}
+	})
+}
+
 func TestGetPATHDirs(t *testing.T) {
 	t.Run("returns empty slice when PATH is unset", func(t *testing.T) {
 		t.Setenv("PATH", "")
