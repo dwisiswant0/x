@@ -174,8 +174,8 @@ func WithRestrictScoped() Option {
 //
 // It grants read/execute rights to PATH-derived runtime targets and to
 // resolved shared-library dependency files discovered from executable entries.
-// This is intended for compatibility with host-provided runtimes and shared
-// libraries, and may broaden the sandbox attack surface.
+// Use it for compatibility with host-provided runtimes and shared libraries.
+// It may broaden sandbox access.
 func WithUnsafeHostRuntime() Option {
 	return func(cfg *config) error {
 		pathTargets := runtime.GetPATHDirs()

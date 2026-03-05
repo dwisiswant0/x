@@ -1,8 +1,9 @@
 module go.dw1.io/x/exp/sandboxec
 
-go 1.24.0
+go 1.25
 
 require (
+	github.com/go-webgpu/goffi v0.4.1
 	github.com/landlock-lsm/go-landlock v0.6.0
 	go.dw1.io/fastcache v0.2.0
 )

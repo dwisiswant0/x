@@ -1,6 +1,6 @@
 // nolint
-//go:build linux
-// +build linux
+//go:build linux || darwin
+// +build linux darwin
 
 package sandboxec
 

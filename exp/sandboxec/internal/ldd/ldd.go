@@ -171,7 +171,7 @@ func getDepCache() *fastcache.Cache[string, depCacheEntry] {
 			return
 		}
 
-		depCacheFile = filepath.Join(cacheDir, "go.dw1.io", "x", "exp", "sandboxec", "ldd", "deps-v2.cache")
+		depCacheFile = filepath.Join(cacheDir, "go.dw1.io", "x", "exp", "sandboxec", "ldd", "deps.cache")
 		if err := os.MkdirAll(filepath.Dir(depCacheFile), 0o755); err != nil {
 			depCache = fastcache.New[string, depCacheEntry](16_384)
 			depCacheFile = ""
@@ -196,7 +196,6 @@ func depCacheKey(file string) (string, bool) {
 
 	var builder strings.Builder
 	builder.Grow(len(file) + 56)
-	builder.WriteString("v2|")
 	builder.WriteString(file)
 	builder.WriteByte('|')
 	builder.WriteString(strconv.FormatInt(info.Size(), 10))

@@ -1,13 +1,11 @@
-// nolint
-//go:build linux
-// +build linux
-
-// Package sandboxec wraps os/exec with Landlock policy enforcement.
+// Package sandboxec wraps os/exec with process-wide sandbox policy enforcement.
 //
-// The package enforces Landlock rules once per process; all subsequently
-// created commands run under the same restrictions. Enforcement errors (such as
-// unsupported ABI versions) are surfaced through Cmd Err on the first command
-// creation.
+// On Linux, sandboxec is backed by Landlock. On Darwin, sandboxec is backed by
+// Seatbelt.
+//
+// The package enforces sandbox rules once per process. Commands created after
+// enforcement run under the same restrictions. Enforcement errors are exposed
+// through Cmd Err on the first command creation.
 //
 // Example:
 //
@@ -22,5 +20,11 @@
 //	}
 //	_ = cmd.Run()
 //
-// Note: Landlock support is Linux-only and depends on the running kernel.
+// Platform notes:
+//
+//   - Linux support depends on Landlock availability in the running kernel.
+//   - WithUnsafeHostRuntime expands host runtime access from PATH-derived
+//     targets and dynamic-linker dependency files.
+//   - Darwin support uses github.com/go-webgpu/goffi and requires
+//     CGO_ENABLED=0.
 package sandboxec

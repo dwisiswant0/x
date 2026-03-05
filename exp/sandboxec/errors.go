@@ -1,6 +1,6 @@
 // nolint
-//go:build linux
-// +build linux
+//go:build linux || darwin
+// +build linux darwin
 
 package sandboxec
 
@@ -11,6 +11,10 @@ import "errors"
 //
 // It can be wrapped in option or enforcement errors.
 var ErrLandlockUnavailable = errors.New("landlock is unavailable")
+
+// ErrSeatbeltUnavailable indicates that macOS Seatbelt sandboxing is unavailable
+// or failed to initialize.
+var ErrSeatbeltUnavailable = errors.New("seatbelt is unavailable")
 
 // ErrABINotSupported indicates that the requested ABI is not available on the
 // running kernel.
