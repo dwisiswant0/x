@@ -6,6 +6,7 @@ package sandboxec
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/landlock-lsm/go-landlock/landlock"
 	"github.com/landlock-lsm/go-landlock/landlock/syscall"
@@ -28,10 +29,41 @@ type config struct {
 	netRules        []netRule
 }
 
-const maxABIVersion = 6
+const maxABIVersion = 7
+
+var (
+	landlockABIOnce    sync.Once
+	landlockABIVersion int
+	landlockABIError   error
+)
+
+func getLandlockABIVersion() (int, error) {
+	landlockABIOnce.Do(func() {
+		landlockABIVersion, landlockABIError = syscall.LandlockGetABIVersion()
+	})
+
+	return landlockABIVersion, landlockABIError
+}
+
+func defaultABIVersion() int {
+	supported, err := getLandlockABIVersion()
+	if err != nil {
+		return maxABIVersion
+	}
+
+	if supported < 1 {
+		return 1
+	}
+
+	if supported > maxABIVersion {
+		return maxABIVersion
+	}
+
+	return supported
+}
 
 func defaultConfig() config {
-	return config{abi: maxABIVersion}
+	return config{abi: defaultABIVersion()}
 }
 
 func toLandlockConfig(version int) (landlock.Config, error) {
@@ -48,6 +80,8 @@ func toLandlockConfig(version int) (landlock.Config, error) {
 		return landlock.V5, nil
 	case 6:
 		return landlock.V6, nil
+	case 7:
+		return landlock.V7, nil
 	default:
 		return landlock.Config{}, fmt.Errorf("%w: unsupported ABI version %d", ErrInvalidOption, version)
 	}
@@ -66,7 +100,7 @@ func (c *config) validateCompatibility() error {
 		return nil
 	}
 
-	supported, err := syscall.LandlockGetABIVersion()
+	supported, err := getLandlockABIVersion()
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrLandlockUnavailable, err)
 	}
@@ -78,12 +112,21 @@ func (c *config) validateCompatibility() error {
 	return nil
 }
 
-// WithABI selects the Landlock ABI version (1-6).
+// WithABI selects the Landlock ABI version.
+//
+// Use 0 to auto-select the highest supported ABI on the running kernel, clamped
+// to the maximum ABI supported by this package.
 //
 // The selected version is validated at enforcement time unless best-effort
 // enforcement is enabled.
 func WithABI(version int) Option {
 	return func(cfg *config) error {
+		if version == 0 {
+			cfg.abi = defaultABIVersion()
+
+			return nil
+		}
+
 		if _, err := toLandlockConfig(version); err != nil {
 			return err
 		}
