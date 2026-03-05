@@ -1,6 +1,29 @@
 # sandboxec
 
-Sandboxec provides an os/exec-like API backed by Linux Landlock. It restricts the current process and all goroutines, then runs commands using exec.Cmd.
+Sandboxec provides an os/exec-like API backed by Linux Landlock and macOS Seatbelt. It restricts the current process and all goroutines, then runs commands using exec.Cmd.
+
+## macOS Seatbelt (Darwin)
+
+On Darwin, filesystem/network options are translated into a Seatbelt policy and applied via `sandbox_init`. Build with `CGO_ENABLED=0` (required by goffi).
+
+Darwin currently supports:
+
+- `WithBestEffort`
+- `WithFSRule`
+- `WithNetworkRule`
+- `WithUnsafeHostRuntime`
+
+Darwin currently does not support `WithABI`, `WithIgnoreIfMissing`, or `WithRestrictScoped`.
+
+```go
+sb := sandboxec.New(
+    sandboxec.WithFSRule("/usr", access.FS_READ_EXEC),
+    sandboxec.WithFSRule("/tmp", access.FS_READ_WRITE),
+)
+
+cmd := sb.Command("/bin/echo", "hello")
+_ = cmd.Run()
+```
 
 ## Quick start
 
@@ -44,15 +67,16 @@ _ = cmd.Run()
 
 ## Best-effort mode
 
-`sandboxec.WithBestEffort()` allows your program to run on kernels with older or missing Landlock support. In best-effort mode, enforcement may be partial or absent, so treat it as a compatibility fallback rather than a security boundary.
+`sandboxec.WithBestEffort()` lets programs run on systems with older kernels or missing Landlock support. In this mode, enforcement can be partial or skipped, so do not treat it as a security boundary.
 
 ## Network policy semantics
 
-- On Landlock ABI V4+, network access is restricted with a deny-by-default model.
-- `WithNetworkRule` explicitly allowlists TCP `bind(2)` / `connect(2)` access for selected ports.
-- If you set no network rules on ABI V4+, TCP bind/connect are denied.
-- On ABI V1-V3, Landlock does not provide TCP bind/connect restrictions.
-- In best-effort mode, kernel limitations may relax or disable enforcement.
+- On Landlock ABI V4+, network access is deny-by-default.
+- `WithNetworkRule` allows TCP `bind(2)` and `connect(2)` on selected ports.
+- With no network rules on ABI V4+, TCP bind/connect calls are denied.
+- On Darwin, Seatbelt network policy is also deny-by-default, and `WithNetworkRule` opens selected ports.
+- On ABI V1-V3, Landlock does not restrict TCP bind/connect.
+- In best-effort mode, enforcement can be relaxed or skipped.
 
 ## Landlock limitations and requirements
 
@@ -82,11 +106,16 @@ _ = cmd.Run()
 - `sandboxec.Command` and `sandboxec.CommandContext` mirror `exec.Command` behavior.
 - Path lookup and `exec.ErrDot` behavior are preserved.
 - Use `WithIgnoreIfMissing` to gracefully allow optional paths.
-- Without `WithBestEffort`, unsupported requested ABI fails closed with an error.
+- Without `WithBestEffort`, unsupported requested ABI values return an error.
 
-## Filesystem options
+## Options
 
-- `WithFSRule` adds a filesystem rule for a path using `access.FS` helper masks.
+- `WithFSRule` adds a filesystem rule for a path using `access.FS` masks.
 - `WithNetworkRule` adds a network rule for a port using `access.Network` masks.
-- `WithUnsafeHostRuntime` allowlists host runtime paths (PATH, LD_LIBRARY_PATH, and discovered shared-library directories) with `FS_READ_EXEC`; this is host-dependent and less strict than explicit rules.
+- `WithUnsafeHostRuntime` adds `FS_READ_EXEC` rules for runtime paths discovered from `PATH` and dynamic-linker dependency files. This behavior depends on the host and is less strict than explicit rules.
+
+Dependency discovery details:
+
+- Linux: dependency files are resolved via linker/runtime inspection (`ldd`-style expansion).
+- Darwin: dependency files are resolved from Mach-O load commands.
 
