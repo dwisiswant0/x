@@ -4,7 +4,7 @@ go 1.25
 
 require (
 	github.com/go-webgpu/goffi v0.4.1
-	github.com/landlock-lsm/go-landlock v0.6.0
+	github.com/landlock-lsm/go-landlock v0.7.0
 	go.dw1.io/fastcache v0.2.0
 )
 

@@ -23,8 +23,9 @@
 // Platform notes:
 //
 //   - Linux support depends on Landlock availability in the running kernel.
+//   - On Linux, the default ABI is auto-selected to the highest ABI supported
+//     by both kernel and package.
 //   - WithUnsafeHostRuntime expands host runtime access from PATH-derived
 //     targets and dynamic-linker dependency files.
-//   - Darwin support uses github.com/go-webgpu/goffi and requires
-//     CGO_ENABLED=0.
+//   - Darwin support requires CGO_ENABLED=0.
 package sandboxec

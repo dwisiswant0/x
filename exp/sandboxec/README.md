@@ -29,7 +29,6 @@ _ = cmd.Run()
 
 ```go
 sb := sandboxec.New(
-    sandboxec.WithABI(6),
     sandboxec.WithFSRule("/usr", access.FS_READ_EXEC),
     sandboxec.WithFSRule("/bin", access.FS_READ_EXEC),
     sandboxec.WithFSRule("/tmp", access.FS_READ_WRITE),
@@ -57,7 +56,7 @@ Network restrictions (bind to 8080 and connect to 53 only):
 
 ```go
 sb := sandboxec.New(
-    sandboxec.WithABI(6),
+    sandboxec.WithABI(7),
     sandboxec.WithNetworkRule(8080, access.NETWORK_BIND_TCP),
     sandboxec.WithNetworkRule(53, access.NETWORK_CONNECT_TCP),
 )
@@ -91,7 +90,7 @@ _ = cmd.Run()
 | --- | --- |
 | Go | 1.24+ |
 | Kernel | 5.13+ for Landlock V1, newer for higher ABIs |
-| ABI | 1-6 (selected with WithABI) |
+| ABI | 1-7 (`WithABI(0)` auto-selects highest supported ABI) |
 
 ### Kernel capability guide
 
@@ -105,6 +104,8 @@ _ = cmd.Run()
 
 - `sandboxec.Command` and `sandboxec.CommandContext` mirror `exec.Command` behavior.
 - Path lookup and `exec.ErrDot` behavior are preserved.
+- Linux defaults to the highest available ABI supported by both kernel and package.
+- `WithABI(0)` forces auto-selection; explicit `WithABI(1..7)` pins the ABI.
 - Use `WithIgnoreIfMissing` to gracefully allow optional paths.
 - Without `WithBestEffort`, unsupported requested ABI values return an error.
 
