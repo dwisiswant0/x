@@ -92,6 +92,10 @@ func TestDarwinSeatbeltPolicyFSExecDeniedThenAllowlists(t *testing.T) {
 	}
 }
 
+func TestDarwinSeatbeltProbeDoesNotCrash(t *testing.T) {
+	runHelperDarwin(t, "seatbelt-probe", nil)
+}
+
 func TestDarwinParityOutput(t *testing.T) {
 	runHelperDarwin(t, "parity-output", nil)
 }

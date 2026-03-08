@@ -14,6 +14,8 @@ var ErrLandlockUnavailable = errors.New("landlock is unavailable")
 
 // ErrSeatbeltUnavailable indicates that macOS Seatbelt sandboxing is unavailable
 // or failed to initialize.
+//
+// It can be wrapped in option or enforcement errors.
 var ErrSeatbeltUnavailable = errors.New("seatbelt is unavailable")
 
 // ErrABINotSupported indicates that the requested ABI is not available on the
