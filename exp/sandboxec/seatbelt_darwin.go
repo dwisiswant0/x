@@ -43,31 +43,32 @@ func applySeatbelt(policy string, flags uint64) error {
 
 	policyBytes := append([]byte(policy), 0)
 	policyPtr := unsafe.Pointer(&policyBytes[0])
+	policyArg := policyPtr
 
 	flagsArg := flags
-	var errBuf uintptr
+	var errBuf unsafe.Pointer
 	var result int32
 
 	err := ffi.CallFunction(
 		&seatbeltRuntime.sandboxInitCIF,
 		seatbeltRuntime.sandboxInit,
 		unsafe.Pointer(&result),
-		[]unsafe.Pointer{policyPtr, unsafe.Pointer(&flagsArg), unsafe.Pointer(&errBuf)},
+		[]unsafe.Pointer{unsafe.Pointer(&policyArg), unsafe.Pointer(&flagsArg), unsafe.Pointer(&errBuf)},
 	)
 	runtime.KeepAlive(policyBytes)
 	if err != nil {
 		return fmt.Errorf("%w: call sandbox_init: %v", ErrSeatbeltUnavailable, err)
 	}
 
-	if errBuf != 0 {
+	if errBuf != nil {
 		defer func() {
-			_ = callLibcFree(unsafe.Pointer(errBuf))
+			_ = callLibcFree(errBuf)
 		}()
 	}
 
 	if result != 0 {
-		if errBuf != 0 {
-			return fmt.Errorf("%w: sandbox_init returned %d: %s", ErrSeatbeltUnavailable, result, cString(unsafe.Pointer(errBuf)))
+		if errBuf != nil {
+			return fmt.Errorf("%w: sandbox_init returned %d: %s", ErrSeatbeltUnavailable, result, cString(errBuf))
 		}
 
 		return fmt.Errorf("%w: sandbox_init returned %d", ErrSeatbeltUnavailable, result)

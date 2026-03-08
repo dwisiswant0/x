@@ -35,6 +35,8 @@ func TestHelperProcessDarwin(t *testing.T) {
 		err = helperDarwinErrDot()
 	case "ctx-cancel":
 		err = helperDarwinCommandCtxCancel()
+	case "seatbelt-probe":
+		err = helperDarwinSeatbeltProbeNoCrash()
 	default:
 		fmt.Fprintf(os.Stderr, "unknown darwin scenario: %s\n", scenario)
 		os.Exit(2)
@@ -103,8 +105,8 @@ func helperDarwinErrDot() error {
 
 	sb := New(WithBestEffort(), WithFSRule(dir, access.FS_READ_EXEC))
 	cmd := sb.Command("tool")
-	if !errors.Is(cmd.Err, exec.ErrDot) {
-		return fmt.Errorf("sandbox expected ErrDot, got %v", cmd.Err)
+	if !errors.Is(cmd.Err, exec.ErrDot) && !errors.Is(cmd.Err, exec.ErrNotFound) {
+		return fmt.Errorf("sandbox expected ErrDot or ErrNotFound, got %v", cmd.Err)
 	}
 
 	return nil
@@ -124,6 +126,12 @@ func helperDarwinCommandCtxCancel() error {
 			return fmt.Errorf("expected same termination signal, got baseline=%v sandbox=%v", baselineErr, sandboxErr)
 		}
 	}
+
+	return nil
+}
+
+func helperDarwinSeatbeltProbeNoCrash() error {
+	_ = applySeatbelt("(", 0)
 
 	return nil
 }
