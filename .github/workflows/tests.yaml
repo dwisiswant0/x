@@ -19,7 +19,7 @@ jobs:
     outputs:
       modules: ${{ steps.detect.outputs.modules }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Detect changed modules
@@ -75,8 +75,8 @@ jobs:
         module: ${{ fromJSON(needs.changes.outputs.modules) }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: "stable"
       - run: |
@@ -97,14 +97,14 @@ jobs:
         runner: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         id: setup-go-from-mod
         continue-on-error: true
         with:
           go-version-file: ${{ matrix.module }}/go.mod
           cache-dependency-path: ${{ matrix.module }}/go.sum
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         if: ${{ steps.setup-go-from-mod.outcome == 'failure' }}
         with:
           go-version: "stable"
@@ -125,8 +125,8 @@ jobs:
         module: ${{ fromJSON(needs.changes.outputs.modules) }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: "stable"
       - uses: oven-sh/setup-bun@v2
