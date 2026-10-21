@@ -39,6 +39,12 @@ func TestHelperProcessDarwin(t *testing.T) {
 		err = helperDarwinSeatbeltProbeNoCrash()
 	case "no-rules":
 		err = helperDarwinNoRules()
+	case "exec-requires-rx":
+		err = helperDarwinExecRequiresRX()
+	case "script-interpreter-denied":
+		err = helperDarwinScriptInterpreter(access.FS_READ)
+	case "script-interpreter-allowed":
+		err = helperDarwinScriptInterpreter(access.FS_READ_EXEC)
 	case "fs-narrow-exec":
 		err = helperDarwinFSNarrowExec()
 	case "touch-allowed":
@@ -156,12 +162,62 @@ func helperDarwinNoRules() error {
 
 	// Pass stdin through so the sandboxed parent never has to open /dev/null.
 	cmd.Stdin = os.Stdin
-	out, err := cmd.CombinedOutput()
-	if err == nil || strings.Contains(string(out), "sandboxec-secret") {
-		return fmt.Errorf("expected read without rules to be denied, got %v: %s", err, strings.TrimSpace(string(out)))
+	if out, err := cmd.CombinedOutput(); !errors.Is(err, os.ErrPermission) {
+		return fmt.Errorf("expected exec without rules to be denied, got %v: %s", err, strings.TrimSpace(string(out)))
 	}
-	if !strings.Contains(string(out), "Operation not permitted") {
-		return fmt.Errorf("expected permission denial, got %v: %s", err, strings.TrimSpace(string(out)))
+
+	// The sandbox also applies to this process, so it cannot read the file.
+	if _, err := os.ReadFile(file); !errors.Is(err, os.ErrPermission) {
+		return fmt.Errorf("expected read without rules to be denied, got %v", err)
+	}
+
+	return nil
+}
+
+func helperDarwinExecRequiresRX() error {
+	sb := New(
+		WithFSRule("/usr", access.FS_READ),
+		WithFSRule("/bin", access.FS_READ),
+		WithFSRule("/dev/null", access.FS_READ_WRITE),
+	)
+	cmd := sb.Command("/bin/echo", "hello")
+	if cmd.Err != nil {
+		return fmt.Errorf("enforce failed: %w", cmd.Err)
+	}
+
+	if out, err := cmd.CombinedOutput(); !errors.Is(err, os.ErrPermission) {
+		return fmt.Errorf("expected exec under read-only rules to be denied, got %v: %s", err, strings.TrimSpace(string(out)))
+	}
+
+	return nil
+}
+
+// helperDarwinScriptInterpreter runs a "#!/bin/echo" script from an rx
+// directory, with binRights on /bin, where the interpreter lives.
+func helperDarwinScriptInterpreter(binRights access.FS) error {
+	dir := os.Getenv("SANDBOXEC_DIR")
+	script := filepath.Join(dir, "script")
+
+	sb := New(
+		WithFSRule("/usr", access.FS_READ_EXEC),
+		WithFSRule("/bin", binRights),
+		WithFSRule("/dev/null", access.FS_READ_WRITE),
+		WithFSRule(dir, access.FS_READ_EXEC),
+	)
+	cmd := sb.Command(script)
+	if cmd.Err != nil {
+		return fmt.Errorf("enforce failed: %w", cmd.Err)
+	}
+
+	out, err := cmd.CombinedOutput()
+	if binRights&access.FS_READ_EXEC != access.FS_READ_EXEC {
+		if !errors.Is(err, os.ErrPermission) {
+			return fmt.Errorf("expected exec with a non-executable interpreter to be denied, got %v: %s", err, strings.TrimSpace(string(out)))
+		}
+		return nil
+	}
+	if err != nil || !strings.Contains(string(out), "script") {
+		return fmt.Errorf("expected script to run, got %v: %s", err, strings.TrimSpace(string(out)))
 	}
 
 	return nil

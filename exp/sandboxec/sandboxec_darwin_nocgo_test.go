@@ -21,6 +21,30 @@ func TestDarwinNoRulesDeniesFS(t *testing.T) {
 	runHelperDarwin(t, "no-rules", map[string]string{"SANDBOXEC_FILE": file})
 }
 
+func TestDarwinReadRuleDeniesExec(t *testing.T) {
+	runHelperDarwin(t, "exec-requires-rx", nil)
+}
+
+// A script runs only when its interpreter is executable too, as on Linux.
+func TestDarwinScriptInterpreterNeedsExec(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		scenario string
+	}{
+		{name: "denied", scenario: "script-interpreter-denied"},
+		{name: "allowed", scenario: "script-interpreter-allowed"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "script"), []byte("#!/bin/echo\n"), 0o755); err != nil {
+				t.Fatalf("WriteFile returned error: %v", err)
+			}
+
+			runHelperDarwin(t, tt.scenario, map[string]string{"SANDBOXEC_DIR": dir})
+		})
+	}
+}
+
 func TestDarwinNarrowFSRulesRunCommand(t *testing.T) {
 	runHelperDarwin(t, "fs-narrow-exec", nil)
 }
