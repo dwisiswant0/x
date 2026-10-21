@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 
@@ -89,6 +90,37 @@ func TestDarwinSeatbeltPolicyFSExecDeniedThenAllowlists(t *testing.T) {
 
 	if !strings.Contains(policy, `(allow file-map-executable (subpath "/usr"))`) {
 		t.Fatalf("policy must allowlist executable mapping for explicit FS_READ_EXEC rules, got:\n%s", policy)
+	}
+}
+
+func TestDarwinSeatbeltPolicyFSRightsAreExact(t *testing.T) {
+	ops := []string{"file-read*", "file-write*", "file-map-executable"}
+	tests := []struct {
+		name    string
+		rights  access.FS
+		allowed []string
+	}{
+		{name: "read", rights: access.FS_READ, allowed: []string{"file-read*"}},
+		{name: "read_exec", rights: access.FS_READ_EXEC, allowed: []string{"file-read*", "file-map-executable"}},
+		{name: "write", rights: access.FS_WRITE, allowed: []string{"file-write*"}},
+		{name: "read_write", rights: access.FS_READ_WRITE, allowed: []string{"file-read*", "file-write*"}},
+		{name: "read_write_exec", rights: access.FS_READ_WRITE_EXEC, allowed: ops},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := defaultConfig()
+			cfg.fsRules = append(cfg.fsRules, fsRule{path: "/x", rights: tt.rights})
+			policy := cfg.seatbeltPolicy()
+
+			for _, op := range ops {
+				want := slices.Contains(tt.allowed, op)
+				got := strings.Contains(policy, `(allow `+op+` (subpath "/x"))`)
+				if got != want {
+					t.Errorf("%s allowed = %v, want %v; policy:\n%s", op, got, want, policy)
+				}
+			}
+		})
 	}
 }
 

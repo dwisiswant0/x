@@ -6,6 +6,7 @@ package sandboxec
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -138,21 +139,32 @@ func (c config) seatbeltPolicy() string {
 
 	if len(c.fsRules) > 0 {
 		lines = append(lines, "(deny file-read*)", "(deny file-write*)", "(deny file-map-executable)")
+		// dyld reads the root directory to locate its shared cache; without
+		// this, every exec aborts with SIGABRT before reaching main.
+		lines = append(lines, `(allow file-read-data (literal "/"))`)
 	}
 
 	for _, rule := range c.fsRules {
-		safePath := strings.ReplaceAll(rule.path, `"`, `\\"`)
+		path, links := resolveSeatbeltPath(rule.path)
 
-		if rule.rights&access.FS_READ != 0 || rule.rights&access.FS_READ_EXEC != 0 || rule.rights&access.FS_READ_WRITE != 0 || rule.rights&access.FS_READ_WRITE_EXEC != 0 {
-			lines = append(lines, `(allow file-read* (subpath "`+safePath+`"))`)
+		// Seatbelt checks each symlink a command traverses, so reaching the
+		// rule through its original path needs each link's metadata readable.
+		for _, link := range links {
+			lines = append(lines, `(allow file-read-metadata (literal `+seatbeltQuote(link)+`))`)
 		}
 
-		if rule.rights&access.FS_WRITE != 0 || rule.rights&access.FS_READ_WRITE != 0 || rule.rights&access.FS_READ_WRITE_EXEC != 0 {
-			lines = append(lines, `(allow file-write* (subpath "`+safePath+`"))`)
+		quotedPath := seatbeltQuote(path)
+
+		if rule.rights&access.FS_READ != 0 {
+			lines = append(lines, `(allow file-read* (subpath `+quotedPath+`))`)
 		}
 
-		if rule.rights&access.FS_READ_EXEC != 0 || rule.rights&access.FS_READ_WRITE_EXEC != 0 {
-			lines = append(lines, `(allow file-map-executable (subpath "`+safePath+`"))`)
+		if rule.rights&access.FS_WRITE != 0 {
+			lines = append(lines, `(allow file-write* (subpath `+quotedPath+`))`)
+		}
+
+		if rule.rights&access.FS_READ_EXEC == access.FS_READ_EXEC {
+			lines = append(lines, `(allow file-map-executable (subpath `+quotedPath+`))`)
 		}
 	}
 
@@ -196,6 +208,60 @@ func (c config) seatbeltPolicy() string {
 	}
 
 	return strings.Join(lines, "\n")
+}
+
+var seatbeltEscaper = strings.NewReplacer(`\`, `\\`, `"`, `\"`)
+
+// seatbeltQuote returns s as an SBPL string literal. Resolved paths include
+// symlink targets read from disk, so they must not be able to end the string.
+func seatbeltQuote(s string) string {
+	return `"` + seatbeltEscaper.Replace(s) + `"`
+}
+
+// maxSymlinkHops bounds symlink resolution, matching [filepath.EvalSymlinks].
+const maxSymlinkHops = 255
+
+// resolveSeatbeltPath returns the symlink-free form of path, which is what
+// Seatbelt matches against (for example, /tmp is /private/tmp), and the
+// symlink-free location of each symlink traversed to reach it. Relative or
+// unresolvable paths are returned unchanged, with no links.
+func resolveSeatbeltPath(path string) (string, []string) {
+	if !filepath.IsAbs(path) {
+		return path, nil
+	}
+
+	var links []string
+	resolved := "/"
+	pending := strings.Split(path, "/")
+	for len(pending) > 0 {
+		name := pending[0]
+		pending = pending[1:]
+		if name == "" || name == "." {
+			continue
+		}
+
+		next := filepath.Join(resolved, name)
+		info, err := os.Lstat(next)
+		if err != nil {
+			return path, nil
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			resolved = next
+			continue
+		}
+
+		target, err := os.Readlink(next)
+		if err != nil || len(links) == maxSymlinkHops {
+			return path, nil
+		}
+		links = append(links, next)
+		if filepath.IsAbs(target) {
+			resolved = "/"
+		}
+		pending = append(strings.Split(target, "/"), pending...)
+	}
+
+	return resolved, links
 }
 
 type fsRule struct {

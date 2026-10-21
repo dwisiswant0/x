@@ -37,6 +37,14 @@ func TestHelperProcessDarwin(t *testing.T) {
 		err = helperDarwinCommandCtxCancel()
 	case "seatbelt-probe":
 		err = helperDarwinSeatbeltProbeNoCrash()
+	case "fs-narrow-exec":
+		err = helperDarwinFSNarrowExec()
+	case "touch-allowed":
+		err = helperDarwinTouchAllowed()
+	case "touch-denied":
+		err = helperDarwinTouchDenied()
+	case "fs-path-injection":
+		err = helperDarwinFSPathInjection()
 	default:
 		fmt.Fprintf(os.Stderr, "unknown darwin scenario: %s\n", scenario)
 		os.Exit(2)
@@ -136,12 +144,124 @@ func helperDarwinSeatbeltProbeNoCrash() error {
 	return nil
 }
 
+func helperDarwinFSNarrowExec() error {
+	sb := New(
+		WithFSRule("/usr", access.FS_READ_EXEC),
+		WithFSRule("/bin", access.FS_READ_EXEC),
+		WithFSRule("/dev/null", access.FS_READ_WRITE),
+	)
+	cmd := sb.Command("/bin/echo", "hello")
+	if cmd.Err != nil {
+		return fmt.Errorf("enforce failed: %w", cmd.Err)
+	}
+
+	out, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("exec under narrow fs rules failed: %w", err)
+	}
+	if string(out) != "hello\n" {
+		return fmt.Errorf("unexpected output: %q", out)
+	}
+
+	return nil
+}
+
+func helperDarwinTouchAllowed() error {
+	dir := os.Getenv("SANDBOXEC_DIR")
+	target := filepath.Join(dir, "allowed.txt")
+
+	sb := New(
+		WithFSRule("/usr", access.FS_READ_EXEC),
+		WithFSRule("/dev/null", access.FS_READ_WRITE),
+		WithFSRule(dir, access.FS_READ_WRITE),
+	)
+	cmd := sb.Command("/usr/bin/touch", target)
+	if cmd.Err != nil {
+		return fmt.Errorf("enforce failed: %w", cmd.Err)
+	}
+
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("touch allowed failed: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+	if _, err := os.Stat(target); err != nil {
+		return fmt.Errorf("expected file to exist: %w", err)
+	}
+
+	return nil
+}
+
+func helperDarwinTouchDenied() error {
+	target := filepath.Join(os.Getenv("SANDBOXEC_DIR"), "denied.txt")
+
+	sb := New(
+		WithFSRule("/", access.FS_READ_EXEC),
+		WithFSRule("/dev/null", access.FS_READ_WRITE),
+	)
+	cmd := sb.Command("/usr/bin/touch", target)
+	if cmd.Err != nil {
+		return fmt.Errorf("enforce failed: %w", cmd.Err)
+	}
+
+	if err := expectTouchDenied(cmd, target); err != nil {
+		return fmt.Errorf("touch under a read_exec rule: %w", err)
+	}
+
+	return nil
+}
+
+func helperDarwinFSPathInjection() error {
+	dir := os.Getenv("SANDBOXEC_DIR")
+	link := filepath.Join(dir, "link")
+	allowed := filepath.Join(link, "allowed.txt")
+	blocked := filepath.Join(dir, "blocked.txt")
+
+	sb := New(
+		WithFSRule("/usr", access.FS_READ_EXEC),
+		WithFSRule("/dev/null", access.FS_READ_WRITE),
+		WithFSRule(link, access.FS_READ_WRITE),
+	)
+	cmd := sb.Command("/usr/bin/touch", blocked)
+	if cmd.Err != nil {
+		return fmt.Errorf("enforce failed: %w", cmd.Err)
+	}
+
+	if err := expectTouchDenied(cmd, blocked); err != nil {
+		return fmt.Errorf("touch outside rule: %w", err)
+	}
+	if out, err := sb.Command("/usr/bin/touch", allowed).CombinedOutput(); err != nil {
+		return fmt.Errorf("touch inside rule failed: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+
+	return nil
+}
+
+// expectTouchDenied runs cmd, a touch of target, and checks that Seatbelt
+// rejected the write rather than the command failing for another reason.
+func expectTouchDenied(cmd *Cmd, target string) error {
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		return fmt.Errorf("expected denial, got success")
+	}
+	if !strings.Contains(string(out), "Operation not permitted") {
+		return fmt.Errorf("expected permission denial, got %v: %s", err, strings.TrimSpace(string(out)))
+	}
+	if _, err := os.Stat(target); err == nil {
+		return fmt.Errorf("expected file not to be created: %s", target)
+	}
+
+	return nil
+}
+
 func runWithTimeout(useSandbox bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
 	if useSandbox {
-		sb := New(WithBestEffort(), WithFSRule("/", access.FS_READ_EXEC))
+		sb := New(
+			WithBestEffort(),
+			WithFSRule("/", access.FS_READ_EXEC),
+			WithFSRule("/dev/null", access.FS_READ_WRITE),
+		)
 		cmd := sb.CommandContext(ctx, "/bin/sleep", "5")
 
 		return cmd.Run()

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -107,6 +108,37 @@ func TestDarwinWithUnsafeHostRuntimeDedupesAndNormalizes(t *testing.T) {
 	}
 }
 
+func TestDarwinResolveSeatbeltPath(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("EvalSymlinks returned error: %v", err)
+	}
+
+	// root/hop1 -> root/hop2 -> root/real
+	if err := os.MkdirAll(filepath.Join(root, "real", "dir"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	if err := os.Symlink("real", filepath.Join(root, "hop2")); err != nil {
+		t.Fatalf("Symlink returned error: %v", err)
+	}
+	if err := os.Symlink(filepath.Join(root, "hop2"), filepath.Join(root, "hop1")); err != nil {
+		t.Fatalf("Symlink returned error: %v", err)
+	}
+
+	resolved, links := resolveSeatbeltPath(filepath.Join(root, "hop1", "dir"))
+	if want := filepath.Join(root, "real", "dir"); resolved != want {
+		t.Fatalf("resolved = %q, want %q", resolved, want)
+	}
+	if want := []string{filepath.Join(root, "hop1"), filepath.Join(root, "hop2")}; !slices.Equal(links, want) {
+		t.Fatalf("links = %q, want %q", links, want)
+	}
+
+	missing := filepath.Join(root, "hop1", "missing")
+	if resolved, links := resolveSeatbeltPath(missing); resolved != missing || links != nil {
+		t.Fatalf("missing path resolved to %q with links %q, want it unchanged", resolved, links)
+	}
+}
+
 func TestDarwinSeatbeltPolicyFromRules(t *testing.T) {
 	cfg := defaultConfig()
 
@@ -124,8 +156,9 @@ func TestDarwinSeatbeltPolicyFromRules(t *testing.T) {
 		"(deny file-read*)",
 		"(deny file-write*)",
 		"(deny file-map-executable)",
-		`(allow file-read* (subpath "/tmp"))`,
-		`(allow file-map-executable (subpath "/tmp"))`,
+		// /tmp is a symlink to /private/tmp, the path Seatbelt matches.
+		`(allow file-read* (subpath "/private/tmp"))`,
+		`(allow file-map-executable (subpath "/private/tmp"))`,
 		"(deny network-inbound)",
 		"(deny network-outbound)",
 		`(allow network-inbound (local tcp "*:8443"))`,

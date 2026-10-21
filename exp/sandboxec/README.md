@@ -15,6 +15,8 @@ Darwin currently supports:
 
 Darwin currently does not support `WithABI`, `WithIgnoreIfMissing`, or `WithRestrictScoped`.
 
+When filesystem rules are set, the policy also allows reading the root directory entry (`/`) itself, which dyld needs to start any process. Rule paths are resolved through symlinks, because Seatbelt matches resolved paths (for example, `/tmp` is `/private/tmp`), and the metadata of each symlink traversed to reach them is made readable so commands can still use the original path.
+
 ```go
 sb := sandboxec.New(
     sandboxec.WithFSRule("/usr", access.FS_READ_EXEC),
