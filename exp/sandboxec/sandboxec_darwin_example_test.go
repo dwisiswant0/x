@@ -39,6 +39,8 @@ func ExampleSandboxec_darwinFilesystemRules() {
 
 func ExampleSandboxec_darwinNetworkRules() {
 	sb := sandboxec.New(
+		sandboxec.WithFSRule("/usr", access.FS_READ_EXEC),
+		sandboxec.WithFSRule("/bin", access.FS_READ_EXEC),
 		sandboxec.WithNetworkRule(53, access.NETWORK_CONNECT_TCP),
 	)
 	cmd := sb.Command("/bin/true")

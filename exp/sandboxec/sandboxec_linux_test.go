@@ -46,6 +46,14 @@ func TestInvalidOptionErrors(t *testing.T) {
 	}
 }
 
+func TestNoFSRulesDeniesFS(t *testing.T) {
+	for _, scenario := range []string{"no-rules", "net-only", "scoped-only"} {
+		t.Run(scenario, func(t *testing.T) {
+			runHelper(t, scenario, nil)
+		})
+	}
+}
+
 func TestNetworkRulesRequireV4(t *testing.T) {
 	sb := New(WithABI(3), WithNetworkRule(80, access.NETWORK_BIND_TCP))
 	cmd := sb.Command("/bin/true")

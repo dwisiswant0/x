@@ -89,14 +89,14 @@ func TestDarwinSeatbeltPolicyFSDeniedByDefault(t *testing.T) {
 	}
 }
 
-func TestDarwinSeatbeltPolicyNetworkOnlyLeavesFSUnrestricted(t *testing.T) {
+func TestDarwinSeatbeltPolicyNetworkOnlyDeniesFS(t *testing.T) {
 	cfg := defaultConfig()
 	cfg.netRules = append(cfg.netRules, netRule{port: 443, rights: access.NETWORK_CONNECT_TCP})
 	policy := cfg.seatbeltPolicy()
 
-	for _, unwanted := range []string{"(deny file-read*)", "(deny process-exec*)"} {
-		if strings.Contains(policy, unwanted) {
-			t.Fatalf("network-only policy must not contain %q, got:\n%s", unwanted, policy)
+	for _, want := range []string{"(deny file-read*)", "(deny file-write*)", "(deny file-map-executable)", "(deny process-exec*)"} {
+		if !strings.Contains(policy, want) {
+			t.Fatalf("network-only policy must contain %q, got:\n%s", want, policy)
 		}
 	}
 }

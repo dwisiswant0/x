@@ -32,6 +32,12 @@ func TestHelperProcess(t *testing.T) {
 	scenario := os.Getenv("SANDBOXEC_SCENARIO")
 	var err error
 	switch scenario {
+	case "no-rules":
+		err = helperNoFSRulesDeniesFS()
+	case "net-only":
+		err = helperNoFSRulesDeniesFS(WithNetworkRule(443, access.NETWORK_CONNECT_TCP))
+	case "scoped-only":
+		err = helperNoFSRulesDeniesFS(WithRestrictScoped())
 	case "parity-output":
 		err = helperParityOutput()
 	case "parity-pipes":
@@ -85,6 +91,31 @@ func TestHelperProcess(t *testing.T) {
 	}
 
 	os.Exit(0)
+}
+
+// helperNoFSRulesDeniesFS checks that a sandbox without filesystem rules
+// denies filesystem access, whatever other restrictions opts set.
+func helperNoFSRulesDeniesFS(opts ...Option) error {
+	cmd := New(opts...).Command("/bin/true")
+	if cmd.Err != nil {
+		if isLandlockSkip(cmd.Err) {
+			return fmt.Errorf("SKIP: landlock unavailable: %v", cmd.Err)
+		}
+		return fmt.Errorf("enforce failed: %w", cmd.Err)
+	}
+
+	// Pass stdin through so the sandboxed parent never has to open /dev/null.
+	cmd.Stdin = os.Stdin
+	if out, err := cmd.CombinedOutput(); !isExecDenied(err) {
+		return fmt.Errorf("expected exec without fs rules to be denied, got %v: %s", err, strings.TrimSpace(string(out)))
+	}
+
+	// The sandbox also applies to this process, so it cannot read files.
+	if _, err := os.ReadFile("/etc/hosts"); !errors.Is(err, os.ErrPermission) {
+		return fmt.Errorf("expected read without fs rules to be denied, got %v", err)
+	}
+
+	return nil
 }
 
 func helperParityOutput() error {

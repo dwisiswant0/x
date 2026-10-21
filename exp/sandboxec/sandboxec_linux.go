@@ -125,17 +125,15 @@ func (s *Sandboxec) enforce() error {
 		return nil
 	}
 
-	if hasFSRules {
-		rules, err := s.buildFSRules()
-		if err != nil {
-			return err
-		}
+	// The filesystem is deny-by-default: without FS rules, deny all of it,
+	// even when only network or scoped restrictions are set.
+	rules, err := s.buildFSRules()
+	if err != nil {
+		return err
+	}
 
-		if len(rules) > 0 {
-			if err := cfg.RestrictPaths(rules...); err != nil {
-				return fmt.Errorf("landlock restrict paths failed: %w", err)
-			}
-		}
+	if err := cfg.RestrictPaths(rules...); err != nil {
+		return fmt.Errorf("landlock restrict paths failed: %w", err)
 	}
 
 	// Landlock ABI V1-V3 do not support network rules, so only attempt to apply

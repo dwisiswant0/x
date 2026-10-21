@@ -38,7 +38,9 @@ func TestHelperProcessDarwin(t *testing.T) {
 	case "seatbelt-probe":
 		err = helperDarwinSeatbeltProbeNoCrash()
 	case "no-rules":
-		err = helperDarwinNoRules()
+		err = helperDarwinNoFSRules()
+	case "net-only":
+		err = helperDarwinNoFSRules(WithNetworkRule(443, access.NETWORK_CONNECT_TCP))
 	case "exec-requires-rx":
 		err = helperDarwinExecRequiresRX()
 	case "script-interpreter-denied":
@@ -152,23 +154,25 @@ func helperDarwinSeatbeltProbeNoCrash() error {
 	return nil
 }
 
-func helperDarwinNoRules() error {
+// helperDarwinNoFSRules checks that a sandbox without filesystem rules
+// denies filesystem access, whatever other restrictions opts set.
+func helperDarwinNoFSRules(opts ...Option) error {
 	file := os.Getenv("SANDBOXEC_FILE")
 
-	cmd := New().Command("/bin/cat", file)
+	cmd := New(opts...).Command("/bin/cat", file)
 	if cmd.Err != nil {
 		return fmt.Errorf("enforce failed: %w", cmd.Err)
 	}
 
 	// Pass stdin through so the sandboxed parent never has to open /dev/null.
 	cmd.Stdin = os.Stdin
-	if out, err := cmd.CombinedOutput(); !errors.Is(err, os.ErrPermission) {
-		return fmt.Errorf("expected exec without rules to be denied, got %v: %s", err, strings.TrimSpace(string(out)))
+	if out, err := cmd.CombinedOutput(); !isExecDenied(err) {
+		return fmt.Errorf("expected exec without fs rules to be denied, got %v: %s", err, strings.TrimSpace(string(out)))
 	}
 
 	// The sandbox also applies to this process, so it cannot read the file.
 	if _, err := os.ReadFile(file); !errors.Is(err, os.ErrPermission) {
-		return fmt.Errorf("expected read without rules to be denied, got %v", err)
+		return fmt.Errorf("expected read without fs rules to be denied, got %v", err)
 	}
 
 	return nil
@@ -185,7 +189,7 @@ func helperDarwinExecRequiresRX() error {
 		return fmt.Errorf("enforce failed: %w", cmd.Err)
 	}
 
-	if out, err := cmd.CombinedOutput(); !errors.Is(err, os.ErrPermission) {
+	if out, err := cmd.CombinedOutput(); !isExecDenied(err) {
 		return fmt.Errorf("expected exec under read-only rules to be denied, got %v: %s", err, strings.TrimSpace(string(out)))
 	}
 
@@ -211,7 +215,7 @@ func helperDarwinScriptInterpreter(binRights access.FS) error {
 
 	out, err := cmd.CombinedOutput()
 	if binRights&access.FS_READ_EXEC != access.FS_READ_EXEC {
-		if !errors.Is(err, os.ErrPermission) {
+		if !isExecDenied(err) {
 			return fmt.Errorf("expected exec with a non-executable interpreter to be denied, got %v: %s", err, strings.TrimSpace(string(out)))
 		}
 		return nil
