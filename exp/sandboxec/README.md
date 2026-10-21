@@ -15,7 +15,7 @@ Darwin currently supports:
 
 Darwin currently does not support `WithABI`, `WithIgnoreIfMissing`, or `WithRestrictScoped`.
 
-As on Linux, running a file as a program requires `FS_READ_EXEC` or `FS_READ_WRITE_EXEC` on its path, and for a script, on its interpreter too. A sandbox with no rules at all denies all filesystem access, including running commands, and a sandbox with only network rules leaves the filesystem unrestricted.
+As on Linux, running a file as a program requires `FS_READ_EXEC` or `FS_READ_WRITE_EXEC` on its path, and for a script, on its interpreter too.
 
 When filesystem access is restricted, the policy also allows reading the root directory entry (`/`) itself, which dyld needs to start any process. Rule paths are resolved through symlinks, because Seatbelt matches resolved paths (for example, `/tmp` is `/private/tmp`), and the metadata of each symlink traversed to reach them is made readable so commands can still use the original path.
 
@@ -62,6 +62,8 @@ Network restrictions (bind to 8080 and connect to 53 only):
 ```go
 sb := sandboxec.New(
     sandboxec.WithABI(7),
+    sandboxec.WithFSRule("/usr", access.FS_READ_EXEC),
+    sandboxec.WithFSRule("/bin", access.FS_READ_EXEC),
     sandboxec.WithNetworkRule(8080, access.NETWORK_BIND_TCP),
     sandboxec.WithNetworkRule(53, access.NETWORK_CONNECT_TCP),
 )
@@ -72,6 +74,11 @@ _ = cmd.Run()
 ## Best-effort mode
 
 `sandboxec.WithBestEffort()` lets programs run on systems with older kernels or missing Landlock support. In this mode, enforcement can be partial or skipped, so do not treat it as a security boundary.
+
+## Filesystem policy semantics
+
+- Filesystem access is deny-by-default on Linux and Darwin. Only `WithFSRule` and `WithUnsafeHostRuntime` grant it.
+- A sandbox without filesystem rules, including one with only network rules or scoped IPC restrictions, gets no filesystem access rights: its commands cannot read or write files or run programs. Operations that the platform sandbox does not control, such as reading file metadata on Linux, are not affected.
 
 ## Network policy semantics
 
