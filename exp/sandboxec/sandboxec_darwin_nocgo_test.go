@@ -12,6 +12,15 @@ import (
 
 // These tests need Seatbelt enforcement, which cgo builds do not provide.
 
+func TestDarwinNoRulesDeniesFS(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "secret.txt")
+	if err := os.WriteFile(file, []byte("sandboxec-secret\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	runHelperDarwin(t, "no-rules", map[string]string{"SANDBOXEC_FILE": file})
+}
+
 func TestDarwinNarrowFSRulesRunCommand(t *testing.T) {
 	runHelperDarwin(t, "fs-narrow-exec", nil)
 }

@@ -37,6 +37,8 @@ func TestHelperProcessDarwin(t *testing.T) {
 		err = helperDarwinCommandCtxCancel()
 	case "seatbelt-probe":
 		err = helperDarwinSeatbeltProbeNoCrash()
+	case "no-rules":
+		err = helperDarwinNoRules()
 	case "fs-narrow-exec":
 		err = helperDarwinFSNarrowExec()
 	case "touch-allowed":
@@ -140,6 +142,27 @@ func helperDarwinCommandCtxCancel() error {
 
 func helperDarwinSeatbeltProbeNoCrash() error {
 	_ = applySeatbelt("(", 0)
+
+	return nil
+}
+
+func helperDarwinNoRules() error {
+	file := os.Getenv("SANDBOXEC_FILE")
+
+	cmd := New().Command("/bin/cat", file)
+	if cmd.Err != nil {
+		return fmt.Errorf("enforce failed: %w", cmd.Err)
+	}
+
+	// Pass stdin through so the sandboxed parent never has to open /dev/null.
+	cmd.Stdin = os.Stdin
+	out, err := cmd.CombinedOutput()
+	if err == nil || strings.Contains(string(out), "sandboxec-secret") {
+		return fmt.Errorf("expected read without rules to be denied, got %v: %s", err, strings.TrimSpace(string(out)))
+	}
+	if !strings.Contains(string(out), "Operation not permitted") {
+		return fmt.Errorf("expected permission denial, got %v: %s", err, strings.TrimSpace(string(out)))
+	}
 
 	return nil
 }

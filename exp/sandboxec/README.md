@@ -15,7 +15,9 @@ Darwin currently supports:
 
 Darwin currently does not support `WithABI`, `WithIgnoreIfMissing`, or `WithRestrictScoped`.
 
-When filesystem rules are set, the policy also allows reading the root directory entry (`/`) itself, which dyld needs to start any process. Rule paths are resolved through symlinks, because Seatbelt matches resolved paths (for example, `/tmp` is `/private/tmp`), and the metadata of each symlink traversed to reach them is made readable so commands can still use the original path.
+As on Linux, a sandbox with no rules at all denies filesystem reads and writes, and a sandbox with only network rules leaves the filesystem unrestricted. Unlike Landlock, the policy does not deny executing a command, so system commands can still start and fail only when they access a denied path.
+
+When filesystem access is restricted, the policy also allows reading the root directory entry (`/`) itself, which dyld needs to start any process. Rule paths are resolved through symlinks, because Seatbelt matches resolved paths (for example, `/tmp` is `/private/tmp`), and the metadata of each symlink traversed to reach them is made readable so commands can still use the original path.
 
 ```go
 sb := sandboxec.New(

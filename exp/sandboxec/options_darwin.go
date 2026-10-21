@@ -137,7 +137,9 @@ func WithUnsafeHostRuntime() Option {
 func (c config) seatbeltPolicy() string {
 	lines := []string{"(version 1)", "(allow default)"}
 
-	if len(c.fsRules) > 0 {
+	// Match the Linux backend: no rules at all deny everything, and the
+	// filesystem stays unrestricted only when just network rules are set.
+	if len(c.fsRules) > 0 || len(c.netRules) == 0 {
 		lines = append(lines, "(deny file-read*)", "(deny file-write*)", "(deny file-map-executable)")
 		// dyld reads the root directory to locate its shared cache; without
 		// this, every exec aborts with SIGABRT before reaching main.

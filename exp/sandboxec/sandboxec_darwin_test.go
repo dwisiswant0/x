@@ -79,6 +79,16 @@ func TestDarwinSeatbeltPolicyNetworkDeniedByDefault(t *testing.T) {
 	}
 }
 
+func TestDarwinSeatbeltPolicyFSDeniedByDefault(t *testing.T) {
+	policy := defaultConfig().seatbeltPolicy()
+
+	for _, want := range []string{"(deny file-read*)", "(deny file-write*)", "(deny file-map-executable)"} {
+		if !strings.Contains(policy, want) {
+			t.Fatalf("policy without rules must contain %q, got:\n%s", want, policy)
+		}
+	}
+}
+
 func TestDarwinSeatbeltPolicyFSExecDeniedThenAllowlists(t *testing.T) {
 	cfg := defaultConfig()
 	cfg.fsRules = append(cfg.fsRules, fsRule{path: "/usr", rights: access.FS_READ_EXEC})
