@@ -27,6 +27,7 @@ func ExampleSandboxec_darwinBestEffortCompatibility() {
 func ExampleSandboxec_darwinFilesystemRules() {
 	sb := sandboxec.New(
 		sandboxec.WithFSRule("/usr", access.FS_READ_EXEC),
+		sandboxec.WithFSRule("/bin", access.FS_READ_EXEC),
 		sandboxec.WithFSRule("/tmp", access.FS_READ_WRITE),
 	)
 	cmd := sb.Command("/bin/echo", "hello")

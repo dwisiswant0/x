@@ -140,7 +140,7 @@ func (c config) seatbeltPolicy() string {
 	// Match the Linux backend: no rules at all deny everything, and the
 	// filesystem stays unrestricted only when just network rules are set.
 	if len(c.fsRules) > 0 || len(c.netRules) == 0 {
-		lines = append(lines, "(deny file-read*)", "(deny file-write*)", "(deny file-map-executable)")
+		lines = append(lines, "(deny file-read*)", "(deny file-write*)", "(deny file-map-executable)", "(deny process-exec*)")
 		// dyld reads the root directory to locate its shared cache; without
 		// this, every exec aborts with SIGABRT before reaching main.
 		lines = append(lines, `(allow file-read-data (literal "/"))`)
@@ -165,8 +165,13 @@ func (c config) seatbeltPolicy() string {
 			lines = append(lines, `(allow file-write* (subpath `+quotedPath+`))`)
 		}
 
+		// Like Landlock's execute right, exec rights let the rule's files run
+		// as programs; process-exec* also covers a script's interpreter.
 		if rule.rights&access.FS_READ_EXEC == access.FS_READ_EXEC {
-			lines = append(lines, `(allow file-map-executable (subpath `+quotedPath+`))`)
+			lines = append(lines,
+				`(allow file-map-executable (subpath `+quotedPath+`))`,
+				`(allow process-exec* (subpath `+quotedPath+`))`,
+			)
 		}
 	}
 

@@ -82,9 +82,21 @@ func TestDarwinSeatbeltPolicyNetworkDeniedByDefault(t *testing.T) {
 func TestDarwinSeatbeltPolicyFSDeniedByDefault(t *testing.T) {
 	policy := defaultConfig().seatbeltPolicy()
 
-	for _, want := range []string{"(deny file-read*)", "(deny file-write*)", "(deny file-map-executable)"} {
+	for _, want := range []string{"(deny file-read*)", "(deny file-write*)", "(deny file-map-executable)", "(deny process-exec*)"} {
 		if !strings.Contains(policy, want) {
 			t.Fatalf("policy without rules must contain %q, got:\n%s", want, policy)
+		}
+	}
+}
+
+func TestDarwinSeatbeltPolicyNetworkOnlyLeavesFSUnrestricted(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.netRules = append(cfg.netRules, netRule{port: 443, rights: access.NETWORK_CONNECT_TCP})
+	policy := cfg.seatbeltPolicy()
+
+	for _, unwanted := range []string{"(deny file-read*)", "(deny process-exec*)"} {
+		if strings.Contains(policy, unwanted) {
+			t.Fatalf("network-only policy must not contain %q, got:\n%s", unwanted, policy)
 		}
 	}
 }
@@ -104,14 +116,14 @@ func TestDarwinSeatbeltPolicyFSExecDeniedThenAllowlists(t *testing.T) {
 }
 
 func TestDarwinSeatbeltPolicyFSRightsAreExact(t *testing.T) {
-	ops := []string{"file-read*", "file-write*", "file-map-executable"}
+	ops := []string{"file-read*", "file-write*", "file-map-executable", "process-exec*"}
 	tests := []struct {
 		name    string
 		rights  access.FS
 		allowed []string
 	}{
 		{name: "read", rights: access.FS_READ, allowed: []string{"file-read*"}},
-		{name: "read_exec", rights: access.FS_READ_EXEC, allowed: []string{"file-read*", "file-map-executable"}},
+		{name: "read_exec", rights: access.FS_READ_EXEC, allowed: []string{"file-read*", "file-map-executable", "process-exec*"}},
 		{name: "write", rights: access.FS_WRITE, allowed: []string{"file-write*"}},
 		{name: "read_write", rights: access.FS_READ_WRITE, allowed: []string{"file-read*", "file-write*"}},
 		{name: "read_write_exec", rights: access.FS_READ_WRITE_EXEC, allowed: ops},
