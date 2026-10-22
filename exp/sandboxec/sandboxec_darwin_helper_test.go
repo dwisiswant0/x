@@ -36,7 +36,7 @@ func TestHelperProcessDarwin(t *testing.T) {
 	case "ctx-cancel":
 		err = helperDarwinCommandCtxCancel()
 	case "seatbelt-probe":
-		err = helperDarwinSeatbeltProbeNoCrash()
+		err = helperDarwinSeatbeltProbeReportsPolicyError()
 	case "no-rules":
 		err = helperDarwinNoFSRules()
 	case "net-only":
@@ -148,8 +148,15 @@ func helperDarwinCommandCtxCancel() error {
 	return nil
 }
 
-func helperDarwinSeatbeltProbeNoCrash() error {
-	_ = applySeatbelt("(", 0)
+func helperDarwinSeatbeltProbeReportsPolicyError() error {
+	err := applySeatbelt("(", 0)
+	if !errors.Is(err, ErrSeatbeltUnavailable) {
+		return fmt.Errorf("expected invalid policy to fail with ErrSeatbeltUnavailable, got %v", err)
+	}
+	// sandbox_init explains a rejected policy in its error buffer.
+	if !strings.Contains(err.Error(), "sandbox_init returned -1: ") {
+		return fmt.Errorf("expected sandbox_init error details, got %v", err)
+	}
 
 	return nil
 }
@@ -170,12 +177,7 @@ func helperDarwinNoFSRules(opts ...Option) error {
 		return fmt.Errorf("expected exec without fs rules to be denied, got %v: %s", err, strings.TrimSpace(string(out)))
 	}
 
-	// The sandbox also applies to this process, so it cannot read the file.
-	if _, err := os.ReadFile(file); !errors.Is(err, os.ErrPermission) {
-		return fmt.Errorf("expected read without fs rules to be denied, got %v", err)
-	}
-
-	return nil
+	return expectReadDenied(file)
 }
 
 func helperDarwinExecRequiresRX() error {
@@ -224,7 +226,7 @@ func helperDarwinScriptInterpreter(binRights access.FS) error {
 		return fmt.Errorf("expected script to run, got %v: %s", err, strings.TrimSpace(string(out)))
 	}
 
-	return nil
+	return expectReadDenied(os.Getenv("SANDBOXEC_FILE"))
 }
 
 func helperDarwinFSNarrowExec() error {
@@ -246,7 +248,7 @@ func helperDarwinFSNarrowExec() error {
 		return fmt.Errorf("unexpected output: %q", out)
 	}
 
-	return nil
+	return expectReadDenied(os.Getenv("SANDBOXEC_FILE"))
 }
 
 func helperDarwinTouchAllowed() error {
@@ -270,7 +272,7 @@ func helperDarwinTouchAllowed() error {
 		return fmt.Errorf("expected file to exist: %w", err)
 	}
 
-	return nil
+	return expectReadDenied(os.Getenv("SANDBOXEC_FILE"))
 }
 
 func helperDarwinTouchDenied() error {
@@ -313,6 +315,17 @@ func helperDarwinFSPathInjection() error {
 	}
 	if out, err := sb.Command("/usr/bin/touch", allowed).CombinedOutput(); err != nil {
 		return fmt.Errorf("touch inside rule failed: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+
+	return nil
+}
+
+// expectReadDenied checks that this process cannot read file, which no fs rule
+// covers. The sandbox also applies to this process, so scenarios that expect
+// commands to succeed use it to fail when Seatbelt was not enforced.
+func expectReadDenied(file string) error {
+	if _, err := os.ReadFile(file); !errors.Is(err, os.ErrPermission) {
+		return fmt.Errorf("expected read outside fs rules to be denied, got %v", err)
 	}
 
 	return nil

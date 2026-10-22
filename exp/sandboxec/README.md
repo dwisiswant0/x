@@ -4,7 +4,7 @@ Sandboxec provides an os/exec-like API backed by Linux Landlock and macOS Seatbe
 
 ## macOS Seatbelt (Darwin)
 
-On Darwin, filesystem/network options are translated into a Seatbelt policy and applied via `sandbox_init`. Build with `CGO_ENABLED=0` (required by goffi).
+On Darwin, filesystem/network options are translated into a Seatbelt policy and applied via `sandbox_init`.
 
 Darwin currently supports:
 

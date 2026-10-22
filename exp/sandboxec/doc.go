@@ -27,5 +27,4 @@
 //     by both kernel and package.
 //   - WithUnsafeHostRuntime expands host runtime access from PATH-derived
 //     targets and dynamic-linker dependency files.
-//   - Darwin support requires CGO_ENABLED=0.
 package sandboxec
