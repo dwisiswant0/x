@@ -7,6 +7,7 @@ package sandboxec
 import (
 	"fmt"
 	"runtime"
+	"strings"
 	"sync"
 	"unsafe"
 
@@ -14,10 +15,7 @@ import (
 	"github.com/go-webgpu/goffi/types"
 )
 
-const (
-	seatbeltLibPath = "/usr/lib/libsandbox.1.dylib"
-	libSystemPath   = "/usr/lib/libSystem.B.dylib"
-)
+const seatbeltLibPath = "/usr/lib/libsandbox.1.dylib"
 
 var (
 	seatbeltInitOnce sync.Once
@@ -27,13 +25,12 @@ var (
 
 type seatbeltSymbols struct {
 	sandboxLib unsafe.Pointer
-	libSystem  unsafe.Pointer
 
-	sandboxInit unsafe.Pointer
-	libcFree    unsafe.Pointer
+	sandboxInit      unsafe.Pointer
+	sandboxFreeError unsafe.Pointer
 
-	sandboxInitCIF types.CallInterface
-	freeCIF        types.CallInterface
+	sandboxInitCIF      types.CallInterface
+	sandboxFreeErrorCIF types.CallInterface
 }
 
 func applySeatbelt(policy string, flags uint64) error {
@@ -47,13 +44,14 @@ func applySeatbelt(policy string, flags uint64) error {
 
 	flagsArg := flags
 	var errBuf unsafe.Pointer
+	errBufArg := unsafe.Pointer(&errBuf)
 	var result int32
 
 	err := ffi.CallFunction(
 		&seatbeltRuntime.sandboxInitCIF,
 		seatbeltRuntime.sandboxInit,
 		unsafe.Pointer(&result),
-		[]unsafe.Pointer{unsafe.Pointer(&policyArg), unsafe.Pointer(&flagsArg), unsafe.Pointer(&errBuf)},
+		[]unsafe.Pointer{unsafe.Pointer(&policyArg), unsafe.Pointer(&flagsArg), unsafe.Pointer(&errBufArg)},
 	)
 	runtime.KeepAlive(policyBytes)
 	if err != nil {
@@ -62,13 +60,13 @@ func applySeatbelt(policy string, flags uint64) error {
 
 	if errBuf != nil {
 		defer func() {
-			_ = callLibcFree(errBuf)
+			_ = callSandboxFreeError(errBuf)
 		}()
 	}
 
 	if result != 0 {
 		if errBuf != nil {
-			return fmt.Errorf("%w: sandbox_init returned %d: %s", ErrSeatbeltUnavailable, result, cString(errBuf))
+			return fmt.Errorf("%w: sandbox_init returned %d: %s", ErrSeatbeltUnavailable, result, strings.TrimSpace(cString(errBuf)))
 		}
 
 		return fmt.Errorf("%w: sandbox_init returned %d", ErrSeatbeltUnavailable, result)
@@ -87,21 +85,15 @@ func initSeatbeltRuntime() error {
 			return
 		}
 
-		seatbeltRuntime.libSystem, err = ffi.LoadLibrary(libSystemPath)
-		if err != nil {
-			seatbeltInitErr = fmt.Errorf("%w: load libc %q: %v", ErrSeatbeltUnavailable, libSystemPath, err)
-			return
-		}
-
 		seatbeltRuntime.sandboxInit, err = ffi.GetSymbol(seatbeltRuntime.sandboxLib, "sandbox_init")
 		if err != nil {
 			seatbeltInitErr = fmt.Errorf("%w: resolve sandbox_init: %v", ErrSeatbeltUnavailable, err)
 			return
 		}
 
-		seatbeltRuntime.libcFree, err = ffi.GetSymbol(seatbeltRuntime.libSystem, "free")
+		seatbeltRuntime.sandboxFreeError, err = ffi.GetSymbol(seatbeltRuntime.sandboxLib, "sandbox_free_error")
 		if err != nil {
-			seatbeltInitErr = fmt.Errorf("%w: resolve free: %v", ErrSeatbeltUnavailable, err)
+			seatbeltInitErr = fmt.Errorf("%w: resolve sandbox_free_error: %v", ErrSeatbeltUnavailable, err)
 			return
 		}
 
@@ -121,13 +113,13 @@ func initSeatbeltRuntime() error {
 		}
 
 		err = ffi.PrepareCallInterface(
-			&seatbeltRuntime.freeCIF,
+			&seatbeltRuntime.sandboxFreeErrorCIF,
 			types.DefaultCall,
 			types.VoidTypeDescriptor,
 			[]*types.TypeDescriptor{types.PointerTypeDescriptor},
 		)
 		if err != nil {
-			seatbeltInitErr = fmt.Errorf("%w: prepare free interface: %v", ErrSeatbeltUnavailable, err)
+			seatbeltInitErr = fmt.Errorf("%w: prepare sandbox_free_error interface: %v", ErrSeatbeltUnavailable, err)
 			return
 		}
 	})
@@ -135,16 +127,16 @@ func initSeatbeltRuntime() error {
 	return seatbeltInitErr
 }
 
-func callLibcFree(ptr unsafe.Pointer) error {
+func callSandboxFreeError(ptr unsafe.Pointer) error {
 	if ptr == nil {
 		return nil
 	}
 
 	return ffi.CallFunction(
-		&seatbeltRuntime.freeCIF,
-		seatbeltRuntime.libcFree,
+		&seatbeltRuntime.sandboxFreeErrorCIF,
+		seatbeltRuntime.sandboxFreeError,
 		nil,
-		[]unsafe.Pointer{ptr},
+		[]unsafe.Pointer{unsafe.Pointer(&ptr)},
 	)
 }
 
