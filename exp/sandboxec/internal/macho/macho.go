@@ -5,8 +5,12 @@ package macho
 
 import (
 	"debug/macho"
+	"encoding/binary"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -40,56 +44,52 @@ func GetDependencies(root string) ([]string, error) {
 			return append([]string(nil), cached.Deps...), nil
 		}
 
-		deps, err := getDeps(root)
-		if err != nil {
-			return nil, err
+		deps, complete := getDeps(root)
+		if complete {
+			cache.Set(key, depCacheEntry{Deps: deps})
+			maybeSaveDepCache()
 		}
-
-		cache.Set(key, depCacheEntry{Deps: deps})
-		maybeSaveDepCache()
 
 		return append([]string(nil), deps...), nil
 	}
 
-	return getDeps(root)
+	deps, _ := getDeps(root)
+
+	return deps, nil
 }
 
-func getDeps(root string) ([]string, error) {
+// getDeps returns the dependencies of root and, recursively, of each dylib,
+// and whether it read every file it reached.
+//
+// A file that is not Mach-O or cannot be read contributes no dependencies.
+// Per-file failures are skipped so one problematic file does not abort
+// processing the whole walk. Only a root that is not Mach-O, such as a script,
+// leaves the result complete: other failures can be transient, such as a
+// permission change or a dylib being replaced, so their result is not cached.
+func getDeps(root string) ([]string, bool) {
 	rootPath := filepath.Clean(root)
 	execDir := filepath.Dir(rootPath)
 
 	deps := make([]string, 0)
 	seenDeps := make(map[string]struct{})
 	visited := make(map[string]struct{})
+	complete := true
 
-	var walk func(path string) error
-	walk = func(path string) error {
+	var walk func(path string, cpu macho.Cpu)
+	walk = func(path string, cpu macho.Cpu) {
 		cleaned := filepath.Clean(path)
 		if _, ok := visited[cleaned]; ok {
-			return nil
+			return
 		}
 		visited[cleaned] = struct{}{}
 
-		mf, err := macho.Open(cleaned)
+		libraries, rpaths, libCPU, err := readMachO(cleaned, cpu)
 		if err != nil {
-			return err
-		}
-		defer func() {
-			_ = mf.Close()
-		}()
-
-		libraries, err := mf.ImportedLibraries()
-		if err != nil {
-			return err
-		}
-
-		rpaths := make([]string, 0)
-		for _, load := range mf.Loads {
-			rpath, ok := load.(*macho.Rpath)
-			if !ok || rpath.Path == "" {
-				continue
+			if cleaned != rootPath || !notMachO(cleaned) {
+				complete = false
 			}
-			rpaths = append(rpaths, rpath.Path)
+
+			return
 		}
 
 		for _, lib := range libraries {
@@ -104,19 +104,118 @@ func getDeps(root string) ([]string, error) {
 			}
 
 			deps = appendUniqWithSeen(deps, seenDeps, resolved)
-			if err := walk(resolved); err != nil {
-				return err
+			walk(resolved, libCPU)
+		}
+	}
+
+	walk(rootPath, hostCPU())
+
+	return deps, complete
+}
+
+// notMachO reports whether the file at path is certainly not Mach-O: it is
+// shorter than a magic number, or starts with one that is not Mach-O. A read
+// error is not certain, since it can be transient.
+func notMachO(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer func() {
+		_ = f.Close()
+	}()
+
+	var magic [4]byte
+	if n, err := io.ReadFull(f, magic[:]); n < len(magic) {
+		return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
+	}
+
+	switch binary.BigEndian.Uint32(magic[:]) {
+	case macho.MagicFat, macho.Magic32, macho.Magic64, 0xcefaedfe, 0xcffaedfe:
+		return false
+	}
+
+	return true
+}
+
+// hostCPU returns the CPU of the images a native process loads, or 0 when
+// the architecture has no Mach-O CPU type here.
+func hostCPU() macho.Cpu {
+	switch runtime.GOARCH {
+	case "amd64":
+		return macho.CpuAmd64
+	case "arm64":
+		return macho.CpuArm64
+	}
+
+	return 0
+}
+
+// readMachO returns the imported libraries and rpaths of the Mach-O file at
+// path, read through its images for cpu, and the CPU its own dylibs load as.
+// A cpu of 0 reads every image of a universal binary.
+func readMachO(path string, cpu macho.Cpu) (libraries, rpaths []string, libCPU macho.Cpu, err error) {
+	files, libCPU, closeFn, err := openMachO(path, cpu)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	defer closeFn()
+
+	for _, mf := range files {
+		libs, err := mf.ImportedLibraries()
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		libraries = append(libraries, libs...)
+
+		for _, load := range mf.Loads {
+			rpath, ok := load.(*macho.Rpath)
+			if !ok || rpath.Path == "" {
+				continue
 			}
+			rpaths = append(rpaths, rpath.Path)
+		}
+	}
+
+	return libraries, rpaths, libCPU, nil
+}
+
+// openMachO opens a thin or universal Mach-O file and returns the images to
+// inspect for cpu, the CPU its dylibs load as, and a function that closes the
+// file.
+//
+// Most system binaries are universal, which [macho.Open] rejects. A process
+// loads only the slice for its CPU, and its dylibs load as that CPU too, which
+// for a thin x86_64 binary under Rosetta is not the host's. If no slice
+// matches, every slice is used rather than none, and so are the dylibs' slices.
+func openMachO(path string, cpu macho.Cpu) ([]*macho.File, macho.Cpu, func(), error) {
+	ff, err := macho.OpenFat(path)
+	if errors.Is(err, macho.ErrNotFat) {
+		mf, err := macho.Open(path)
+		if err != nil {
+			return nil, 0, nil, err
 		}
 
-		return nil
+		return []*macho.File{mf}, mf.Cpu, func() { _ = mf.Close() }, nil
+	}
+	if err != nil {
+		return nil, 0, nil, err
 	}
 
-	if err := walk(rootPath); err != nil {
-		return nil, err
+	files := make([]*macho.File, 0, len(ff.Arches))
+	for i := range ff.Arches {
+		if ff.Arches[i].Cpu == cpu {
+			files = append(files, ff.Arches[i].File)
+		}
+	}
+	if len(files) == 0 {
+		cpu = 0
+		for i := range ff.Arches {
+			files = append(files, ff.Arches[i].File)
+		}
 	}
 
-	return deps, nil
+	return files, cpu, func() { _ = ff.Close() }, nil
 }
 
 func getDepCache() *fastcache.Cache[string, depCacheEntry] {

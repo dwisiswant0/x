@@ -149,4 +149,4 @@ sb := sandboxec.New(
 
 - `errors.Is(err, sandboxec.ErrUnavailable)` reports that the platform sandbox is unavailable, on any platform. `ErrLandlockUnavailable` and `ErrSeatbeltUnavailable` both match it.
 - `ErrABINotSupported` reports a Landlock ABI that the kernel or the other options do not support.
-- `ErrInvalidOption` reports a malformed option, or one that could not be applied, such as `WithUnsafeHostRuntime` failing to resolve dependency files.
+- `ErrInvalidOption` reports a malformed option, or one that could not be applied, such as `WithUnsafeHostRuntime` on Linux when the path of a library it found cannot be inspected.

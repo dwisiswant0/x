@@ -82,8 +82,9 @@ func WithNetworkRule(port uint16, rights access.Network) Option {
 // Use it for compatibility with host-provided runtimes and shared libraries.
 // It may broaden sandbox access.
 //
-// If the dependency files cannot be resolved, the option fails with
-// [ErrInvalidOption].
+// Files it cannot use, such as scripts or libraries that no longer exist or
+// cannot be read, are skipped. On Linux, the option fails with
+// [ErrInvalidOption] if the path of a library it found cannot be inspected.
 func WithUnsafeHostRuntime() Option {
 	return func(cfg *config.Config) error {
 		pathTargets := runtime.GetPATHDirs()

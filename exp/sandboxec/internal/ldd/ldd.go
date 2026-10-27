@@ -13,7 +13,9 @@ import (
 	"bufio"
 	"bytes"
 	"debug/elf"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -113,10 +115,10 @@ func parseinterpLine(line string) (string, bool) {
 		return "", false
 	}
 
-	// If the third part is a memory address instead
-	// of a file system path, the entry should be skipped.
-	// For example: linux-vdso.so.1 => (0x00007ffe4972d000)
-	if tok2[0] == '(' {
+	// Only an absolute path names a loaded file. Skip a memory address, as in
+	// linux-vdso.so.1 => (0x00007ffe4972d000), and a missing library, as in
+	// libfoo.so.1 => not found, whose "not" would read as a relative path.
+	if tok2[0] != '/' {
 		return "", false
 	}
 
@@ -283,6 +285,10 @@ func GetInterp(file string) (string, error) {
 
 // follow returns all paths and any files they recursively point to through
 // symlinks.
+//
+// A path or link target that does not exist ends that chain without error, so
+// a stale library entry does not abort the whole batch. The links that led to
+// it are dropped too, since they cannot be opened either.
 func follow(paths ...string) ([]string, error) {
 	seen := make(map[string]struct{})
 
@@ -300,16 +306,24 @@ func follow(paths ...string) ([]string, error) {
 }
 
 func followInternal(path string, seen map[string]struct{}) error {
+	var added []string
 	for {
 		if _, ok := seen[path]; ok {
 			return nil
 		}
 		i, err := os.Lstat(path)
+		if errors.Is(err, fs.ErrNotExist) {
+			for _, link := range added {
+				delete(seen, link)
+			}
+			return nil
+		}
 		if err != nil {
 			return err
 		}
 
 		seen[path] = struct{}{}
+		added = append(added, path)
 		if i.Mode().IsRegular() {
 			return nil
 		}

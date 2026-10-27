@@ -61,23 +61,48 @@ func TestDarwinWithNetworkRuleValidation(t *testing.T) {
 	}
 }
 
-// A truncated Mach-O file on PATH makes dependency resolution fail. The host
-// sandbox still works, so the error must not report it as unavailable.
-func TestDarwinWithUnsafeHostRuntimeResolveError(t *testing.T) {
+// Files on PATH that are not loadable Mach-O images, such as scripts, add no
+// dependency files and do not make the option fail.
+func TestDarwinWithUnsafeHostRuntimeSkipsNonMachO(t *testing.T) {
 	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "script"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
 	if err := os.WriteFile(filepath.Join(dir, "truncated"), []byte{0xcf, 0xfa, 0xed, 0xfe}, 0o755); err != nil {
 		t.Fatalf("WriteFile returned error: %v", err)
 	}
 	t.Setenv("PATH", dir)
 
 	var cfg config.Config
-	err := WithUnsafeHostRuntime()(&cfg)
-	if !errors.Is(err, ErrInvalidOption) {
-		t.Fatalf("expected ErrInvalidOption, got %v", err)
+	if err := WithUnsafeHostRuntime()(&cfg); err != nil {
+		t.Fatalf("WithUnsafeHostRuntime returned error: %v", err)
 	}
 
-	if errors.Is(err, ErrUnavailable) {
-		t.Fatalf("expected no match for ErrUnavailable, got %v", err)
+	if len(cfg.FSRules) != 1 {
+		t.Fatalf("expected one fs rule, got %d: %+v", len(cfg.FSRules), cfg.FSRules)
+	}
+
+	if cfg.FSRules[0].Path != filepath.Clean(dir) {
+		t.Fatalf("fs rule path = %q, want %q", cfg.FSRules[0].Path, filepath.Clean(dir))
+	}
+
+	if cfg.FSRules[0].Rights != access.FS_READ_EXEC {
+		t.Fatalf("fs rule rights = %v, want FS_READ_EXEC", cfg.FSRules[0].Rights)
+	}
+}
+
+// The default macOS PATH holds universal binaries and scripts, neither of
+// which may make the option fail.
+func TestDarwinWithUnsafeHostRuntimeDefaultPATH(t *testing.T) {
+	t.Setenv("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+
+	var cfg config.Config
+	if err := WithUnsafeHostRuntime()(&cfg); err != nil {
+		t.Fatalf("WithUnsafeHostRuntime returned error: %v", err)
+	}
+
+	if len(cfg.FSRules) == 0 {
+		t.Fatal("expected fs rules for the default PATH, got none")
 	}
 }
 
