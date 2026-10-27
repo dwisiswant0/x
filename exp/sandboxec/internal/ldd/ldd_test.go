@@ -3,8 +3,10 @@
 package ldd
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -107,6 +109,76 @@ func TestParseinterpLine(t *testing.T) {
 		got, ok := parseinterpLine(tt.line)
 		if got != tt.want || ok != tt.ok {
 			t.Errorf("parseinterpLine(%q) = %q, %v, want %q, %v", tt.line, got, ok, tt.want, tt.ok)
+		}
+	}
+}
+
+// The kernel fails to open a looping chain, or one of more than 40 links, with
+// ELOOP, so neither may become a rule.
+func TestFollowDropsUnopenableChains(t *testing.T) {
+	dir := t.TempDir()
+
+	a, b := filepath.Join(dir, "a"), filepath.Join(dir, "b")
+	if err := os.Symlink(b, a); err != nil {
+		t.Fatalf("Symlink returned error: %v", err)
+	}
+	if err := os.Symlink(a, b); err != nil {
+		t.Fatalf("Symlink returned error: %v", err)
+	}
+	// A link into the loop is dropped with it.
+	into := filepath.Join(dir, "into")
+	if err := os.Symlink(a, into); err != nil {
+		t.Fatalf("Symlink returned error: %v", err)
+	}
+
+	got, err := follow(a, into)
+	if err != nil {
+		t.Fatalf("follow returned error for a symlink loop: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("follow(a, into) = %q, want none", got)
+	}
+
+	// l1 -> file, l2 -> l1, ..., l41 -> l40
+	file := filepath.Join(dir, "file")
+	if err := os.WriteFile(file, nil, 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	target := file
+	for i := 1; i <= maxSymlinks+1; i++ {
+		link := filepath.Join(dir, fmt.Sprintf("l%d", i))
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatalf("Symlink returned error: %v", err)
+		}
+		target = link
+	}
+
+	got, err = follow(filepath.Join(dir, fmt.Sprintf("l%d", maxSymlinks)))
+	if err != nil {
+		t.Fatalf("follow returned error for %d links: %v", maxSymlinks, err)
+	}
+	if len(got) != maxSymlinks+1 {
+		t.Fatalf("follow of %d links returned %d paths, want %d", maxSymlinks, len(got), maxSymlinks+1)
+	}
+
+	got, err = follow(filepath.Join(dir, fmt.Sprintf("l%d", maxSymlinks+1)))
+	if err != nil {
+		t.Fatalf("follow returned error for %d links: %v", maxSymlinks+1, err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("follow of %d links = %q, want none", maxSymlinks+1, got)
+	}
+
+	// Following the shorter chain first must not let the longer one through.
+	longest := filepath.Join(dir, fmt.Sprintf("l%d", maxSymlinks+1))
+	shorter := filepath.Join(dir, fmt.Sprintf("l%d", maxSymlinks))
+	for _, paths := range [][]string{{shorter, longest}, {longest, shorter}} {
+		got, err := follow(paths...)
+		if err != nil {
+			t.Fatalf("follow(%q) returned error: %v", paths, err)
+		}
+		if len(got) != maxSymlinks+1 || slices.Contains(got, longest) {
+			t.Fatalf("follow(%q) returned %d paths (with %q: %v), want %d without it", paths, len(got), longest, slices.Contains(got, longest), maxSymlinks+1)
 		}
 	}
 }

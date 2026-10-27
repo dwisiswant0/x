@@ -20,6 +20,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -324,8 +325,9 @@ func GetInterp(file string) (string, error) {
 // symlinks.
 //
 // A path or link target that does not exist ends that chain without error, so
-// a stale library entry does not abort the whole batch. The links that led to
-// it are dropped too, since they cannot be opened either.
+// a stale library entry does not abort the whole batch. So does a chain that
+// loops or has more links than the kernel follows. The links of such a chain
+// are dropped too, since the path they were followed from cannot be opened.
 func follow(paths ...string) ([]string, error) {
 	seen := make(map[string]struct{})
 
@@ -342,18 +344,39 @@ func follow(paths ...string) ([]string, error) {
 	return deps, nil
 }
 
+// maxSymlinks is the most symlinks the kernel follows when opening a path, its
+// MAXSYMLINKS. One more, or a loop, fails with ELOOP.
+const maxSymlinks = 40
+
 func followInternal(path string, seen map[string]struct{}) error {
+	start := path
 	var added []string
+	drop := func() error {
+		for _, link := range added {
+			delete(seen, link)
+		}
+		return nil
+	}
+	// keep checks that start opens before keeping its chain. The kernel also
+	// counts symlinks in directory components, and in the part of the chain
+	// that an earlier path already followed, which this walk does not see.
+	keep := func() error {
+		if _, err := os.Stat(start); err != nil {
+			return drop()
+		}
+		return nil
+	}
+
 	for {
 		if _, ok := seen[path]; ok {
-			return nil
+			if slices.Contains(added, path) {
+				return drop()
+			}
+			return keep()
 		}
 		i, err := os.Lstat(path)
 		if errors.Is(err, fs.ErrNotExist) {
-			for _, link := range added {
-				delete(seen, link)
-			}
-			return nil
+			return drop()
 		}
 		if err != nil {
 			return err
@@ -362,7 +385,10 @@ func followInternal(path string, seen map[string]struct{}) error {
 		seen[path] = struct{}{}
 		added = append(added, path)
 		if i.Mode().IsRegular() {
-			return nil
+			return keep()
+		}
+		if len(added) > maxSymlinks {
+			return drop()
 		}
 
 		// If it's a symlink, read works; if not, it fails.
