@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"go.dw1.io/x/exp/sandboxec/access"
@@ -43,7 +44,7 @@ func seatbeltPolicy(cfg *config.Config) string {
 	}
 
 	for _, rule := range cfg.FSRules {
-		path, links := resolveSeatbeltPath(filepath.Clean(rule.Path))
+		path, links := resolveSeatbeltPath(rule.Path)
 
 		// Seatbelt checks each symlink a command traverses, so reaching the
 		// rule through its original path needs each link's metadata readable.
@@ -121,20 +122,27 @@ func seatbeltQuote(s string) string {
 	return `"` + seatbeltEscaper.Replace(s) + `"`
 }
 
-// maxSymlinkHops bounds symlink resolution, matching [filepath.EvalSymlinks].
-const maxSymlinkHops = 255
+// maxSymlinkHops bounds symlink resolution, matching the kernel's MAXSYMLINKS.
+const maxSymlinkHops = 32
 
 // resolveSeatbeltPath returns the symlink-free form of path, which is what
 // Seatbelt matches against (for example, /tmp is /private/tmp), and the
 // symlink-free location of each symlink traversed to reach it. Relative or
-// unresolvable paths are returned unchanged, with no links.
+// unresolvable paths are returned as [unresolvedSeatbeltPath] gives them, with
+// no links.
+//
+// Like the kernel, it applies each ".." to the directory that the components
+// before it lead to, so path must not be cleaned first: cleaning turns
+// "link/.." into the directory holding the symlink rather than the parent of
+// its target.
 func resolveSeatbeltPath(path string) (string, []string) {
 	if !filepath.IsAbs(path) {
-		return path, nil
+		return unresolvedSeatbeltPath(path), nil
 	}
 
 	var links []string
 	resolved := "/"
+	resolvedIsDir := true
 	pending := strings.Split(path, "/")
 	for len(pending) > 0 {
 		name := pending[0]
@@ -143,19 +151,25 @@ func resolveSeatbeltPath(path string) (string, []string) {
 			continue
 		}
 
+		// The kernel fails a name or ".." after a file with ENOTDIR.
+		if !resolvedIsDir {
+			return unresolvedSeatbeltPath(path), nil
+		}
+
 		next := filepath.Join(resolved, name)
 		info, err := os.Lstat(next)
 		if err != nil {
-			return path, nil
+			return unresolvedSeatbeltPath(path), nil
 		}
 		if info.Mode()&os.ModeSymlink == 0 {
 			resolved = next
+			resolvedIsDir = info.IsDir()
 			continue
 		}
 
 		target, err := os.Readlink(next)
 		if err != nil || len(links) == maxSymlinkHops {
-			return path, nil
+			return unresolvedSeatbeltPath(path), nil
 		}
 		links = append(links, next)
 		if filepath.IsAbs(target) {
@@ -165,4 +179,16 @@ func resolveSeatbeltPath(path string) (string, []string) {
 	}
 
 	return resolved, links
+}
+
+// unresolvedSeatbeltPath returns path for a policy rule when the path cannot be
+// resolved. Without "..", cleaning it changes nothing the kernel would see. With
+// "..", the cleaned form can name a directory the kernel would never reach
+// through path, so path is kept as is, which Seatbelt never matches.
+func unresolvedSeatbeltPath(path string) string {
+	if slices.Contains(strings.Split(path, "/"), "..") {
+		return path
+	}
+
+	return filepath.Clean(path)
 }
