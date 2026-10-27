@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"go.dw1.io/x/exp/sandboxec/access"
+	"go.dw1.io/x/exp/sandboxec/internal/config"
 )
 
 func subprocessDarwin(scenario string, env map[string]string) ([]byte, error) {
@@ -48,28 +49,8 @@ func TestDarwinInvalidOptionErrors(t *testing.T) {
 	}
 }
 
-func TestDarwinUnsupportedOptions(t *testing.T) {
-	tests := []struct {
-		name string
-		opt  Option
-	}{
-		{name: "WithABI", opt: WithABI(6)},
-		{name: "WithIgnoreIfMissing", opt: WithIgnoreIfMissing()},
-		{name: "WithRestrictScoped", opt: WithRestrictScoped()},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := defaultConfig()
-			if err := tt.opt(&cfg); err == nil {
-				t.Fatalf("expected unsupported option error")
-			}
-		})
-	}
-}
-
 func TestDarwinSeatbeltPolicyNetworkDeniedByDefault(t *testing.T) {
-	policy := defaultConfig().seatbeltPolicy()
+	policy := seatbeltPolicy(&config.Config{})
 
 	if !strings.Contains(policy, "(deny network-inbound)") {
 		t.Fatalf("policy must deny inbound network by default, got:\n%s", policy)
@@ -81,7 +62,7 @@ func TestDarwinSeatbeltPolicyNetworkDeniedByDefault(t *testing.T) {
 }
 
 func TestDarwinSeatbeltPolicyFSDeniedByDefault(t *testing.T) {
-	policy := defaultConfig().seatbeltPolicy()
+	policy := seatbeltPolicy(&config.Config{})
 
 	for _, want := range []string{"(deny file-read*)", "(deny file-write*)", "(deny file-map-executable)", "(deny process-exec*)"} {
 		if !strings.Contains(policy, want) {
@@ -91,9 +72,9 @@ func TestDarwinSeatbeltPolicyFSDeniedByDefault(t *testing.T) {
 }
 
 func TestDarwinSeatbeltPolicyNetworkOnlyDeniesFS(t *testing.T) {
-	cfg := defaultConfig()
-	cfg.netRules = append(cfg.netRules, netRule{port: 443, rights: access.NETWORK_CONNECT_TCP})
-	policy := cfg.seatbeltPolicy()
+	var cfg config.Config
+	cfg.NetRules = append(cfg.NetRules, config.NetRule{Port: 443, Rights: access.NETWORK_CONNECT_TCP})
+	policy := seatbeltPolicy(&cfg)
 
 	for _, want := range []string{"(deny file-read*)", "(deny file-write*)", "(deny file-map-executable)", "(deny process-exec*)"} {
 		if !strings.Contains(policy, want) {
@@ -103,9 +84,9 @@ func TestDarwinSeatbeltPolicyNetworkOnlyDeniesFS(t *testing.T) {
 }
 
 func TestDarwinSeatbeltPolicyFSExecDeniedThenAllowlists(t *testing.T) {
-	cfg := defaultConfig()
-	cfg.fsRules = append(cfg.fsRules, fsRule{path: "/usr", rights: access.FS_READ_EXEC})
-	policy := cfg.seatbeltPolicy()
+	var cfg config.Config
+	cfg.FSRules = append(cfg.FSRules, config.FSRule{Path: "/usr", Rights: access.FS_READ_EXEC})
+	policy := seatbeltPolicy(&cfg)
 
 	if !strings.Contains(policy, "(deny file-map-executable)") {
 		t.Fatalf("policy must deny file-map-executable when fs rules are present, got:\n%s", policy)
@@ -132,9 +113,9 @@ func TestDarwinSeatbeltPolicyFSRightsAreExact(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := defaultConfig()
-			cfg.fsRules = append(cfg.fsRules, fsRule{path: "/x", rights: tt.rights})
-			policy := cfg.seatbeltPolicy()
+			var cfg config.Config
+			cfg.FSRules = append(cfg.FSRules, config.FSRule{Path: "/x", Rights: tt.rights})
+			policy := seatbeltPolicy(&cfg)
 
 			for _, op := range ops {
 				want := slices.Contains(tt.allowed, op)

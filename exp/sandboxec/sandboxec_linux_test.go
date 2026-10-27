@@ -55,7 +55,7 @@ func TestNoFSRulesDeniesFS(t *testing.T) {
 }
 
 func TestNetworkRulesRequireV4(t *testing.T) {
-	sb := New(WithABI(3), WithNetworkRule(80, access.NETWORK_BIND_TCP))
+	sb := New(withABI(3), WithNetworkRule(80, access.NETWORK_BIND_TCP))
 	cmd := sb.Command("/bin/true")
 	if cmd.Err == nil || !errors.Is(cmd.Err, ErrABINotSupported) {
 		t.Fatalf("expected ErrABINotSupported, got %v", cmd.Err)

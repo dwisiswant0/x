@@ -25,6 +25,10 @@
 //   - Linux support depends on Landlock availability in the running kernel.
 //   - On Linux, the default ABI is auto-selected to the highest ABI supported
 //     by both kernel and package.
+//   - Linux-only options, such as the Landlock ABI selection, are in package
+//     sandboxec/landlock.
+//   - [ErrUnavailable] matches the unavailable-sandbox error of either
+//     platform.
 //   - WithUnsafeHostRuntime expands host runtime access from PATH-derived
 //     targets and dynamic-linker dependency files.
 package sandboxec

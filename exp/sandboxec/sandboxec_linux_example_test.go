@@ -9,6 +9,7 @@ import (
 
 	"go.dw1.io/x/exp/sandboxec"
 	"go.dw1.io/x/exp/sandboxec/access"
+	"go.dw1.io/x/exp/sandboxec/landlock"
 )
 
 func ExampleSandboxec_minimalReadOnlyExecution() {
@@ -50,7 +51,7 @@ func ExampleSandboxec_allowReadWriteTempDir() {
 
 func ExampleSandboxec_ignoreOptionalPaths() {
 	sb := sandboxec.New(
-		sandboxec.WithIgnoreIfMissing(),
+		landlock.WithIgnoreIfMissing(),
 		sandboxec.WithFSRule("/etc/optional.conf", access.FS_READ),
 	)
 	cmd := sb.Command("/bin/true")
@@ -75,7 +76,7 @@ func ExampleSandboxec_bestEffortCompatibility() {
 
 func ExampleSandboxec_explicitABISelection() {
 	sb := sandboxec.New(
-		sandboxec.WithABI(7),
+		landlock.WithABI(7),
 		sandboxec.WithFSRule("/usr", access.FS_READ_EXEC),
 		sandboxec.WithFSRule("/bin", access.FS_READ_EXEC),
 	)
@@ -99,7 +100,7 @@ func ExampleSandboxec_customPathAccess() {
 
 func ExampleSandboxec_restrictNetworkToDNS() {
 	sb := sandboxec.New(
-		sandboxec.WithABI(7),
+		landlock.WithABI(7),
 		sandboxec.WithFSRule("/usr", access.FS_READ_EXEC),
 		sandboxec.WithFSRule("/bin", access.FS_READ_EXEC),
 		sandboxec.WithNetworkRule(53, access.NETWORK_CONNECT_TCP),
@@ -113,7 +114,7 @@ func ExampleSandboxec_restrictNetworkToDNS() {
 
 func ExampleSandboxec_allowBindLocalPort() {
 	sb := sandboxec.New(
-		sandboxec.WithABI(7),
+		landlock.WithABI(7),
 		sandboxec.WithFSRule("/usr", access.FS_READ_EXEC),
 		sandboxec.WithFSRule("/bin", access.FS_READ_EXEC),
 		sandboxec.WithNetworkRule(8080, access.NETWORK_BIND_TCP),
@@ -127,10 +128,10 @@ func ExampleSandboxec_allowBindLocalPort() {
 
 func ExampleSandboxec_scopedIPCRestrictions() {
 	sb := sandboxec.New(
-		sandboxec.WithABI(7),
+		landlock.WithABI(7),
 		sandboxec.WithFSRule("/usr", access.FS_READ_EXEC),
 		sandboxec.WithFSRule("/bin", access.FS_READ_EXEC),
-		sandboxec.WithRestrictScoped(),
+		landlock.WithRestrictScoped(),
 	)
 	cmd := sb.Command("/bin/true")
 	_ = cmd.Run()

@@ -13,7 +13,7 @@ Darwin currently supports:
 - `WithNetworkRule`
 - `WithUnsafeHostRuntime`
 
-Darwin currently does not support `WithABI`, `WithIgnoreIfMissing`, or `WithRestrictScoped`.
+The options in the `landlock` package are Linux-only and do not exist on Darwin.
 
 As on Linux, running a file as a program requires `FS_READ_EXEC` or `FS_READ_WRITE_EXEC` on its path, and for a script, on its interpreter too.
 
@@ -61,7 +61,6 @@ Network restrictions (bind to 8080 and connect to 53 only):
 
 ```go
 sb := sandboxec.New(
-    sandboxec.WithABI(7),
     sandboxec.WithFSRule("/usr", access.FS_READ_EXEC),
     sandboxec.WithFSRule("/bin", access.FS_READ_EXEC),
     sandboxec.WithNetworkRule(8080, access.NETWORK_BIND_TCP),
@@ -102,7 +101,7 @@ _ = cmd.Run()
 | --- | --- |
 | Go | 1.24+ |
 | Kernel | 5.13+ for Landlock V1, newer for higher ABIs |
-| ABI | 1-7 (`WithABI(0)` auto-selects highest supported ABI) |
+| ABI | 1-7 (`landlock.WithABI(0)` auto-selects highest supported ABI) |
 
 ### Kernel capability guide
 
@@ -117,8 +116,8 @@ _ = cmd.Run()
 - `sandboxec.Command` and `sandboxec.CommandContext` mirror `exec.Command` behavior.
 - Path lookup and `exec.ErrDot` behavior are preserved.
 - Linux defaults to the highest available ABI supported by both kernel and package.
-- `WithABI(0)` forces auto-selection; explicit `WithABI(1..7)` pins the ABI.
-- Use `WithIgnoreIfMissing` to gracefully allow optional paths.
+- `landlock.WithABI(0)` forces auto-selection; explicit `landlock.WithABI(1..7)` pins the ABI.
+- Use `landlock.WithIgnoreIfMissing` to gracefully allow optional paths.
 - Without `WithBestEffort`, unsupported requested ABI values return an error.
 
 ## Options
@@ -132,3 +131,22 @@ Dependency discovery details:
 - Linux: dependency files are resolved via linker/runtime inspection (`ldd`-style expansion).
 - Darwin: dependency files are resolved from Mach-O load commands.
 
+Linux-only options are in the `landlock` package. They exist only on Linux, so code that uses them must be built for Linux only:
+
+- `landlock.WithABI` selects the Landlock ABI.
+- `landlock.WithIgnoreIfMissing` ignores rule paths that do not exist.
+- `landlock.WithRestrictScoped` enables scoped IPC restrictions (ABI V6+).
+
+```go
+sb := sandboxec.New(
+    landlock.WithABI(7),
+    landlock.WithRestrictScoped(),
+    sandboxec.WithFSRule("/usr", access.FS_READ_EXEC),
+)
+```
+
+## Errors
+
+- `errors.Is(err, sandboxec.ErrUnavailable)` reports that the platform sandbox is unavailable, on any platform. `ErrLandlockUnavailable` and `ErrSeatbeltUnavailable` both match it.
+- `ErrABINotSupported` reports a Landlock ABI that the kernel or the other options do not support.
+- `ErrInvalidOption` reports a malformed option, or one that could not be applied, such as `WithUnsafeHostRuntime` failing to resolve dependency files.
