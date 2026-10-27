@@ -110,3 +110,96 @@ func TestParseinterpLine(t *testing.T) {
 		}
 	}
 }
+
+// A cached dependency list is stale once the loader's cache or environment
+// changes, as after a library moves and ldconfig runs.
+func TestDepCacheKeyTracksLoaderState(t *testing.T) {
+	dir := t.TempDir()
+
+	file := filepath.Join(dir, "bin")
+	if err := os.WriteFile(file, []byte("bin"), 0o755); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	loaderCache := filepath.Join(dir, "ld.so.cache")
+	if err := os.WriteFile(loaderCache, []byte("v1"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	preload := filepath.Join(dir, "ld.so.preload")
+	oldLdSoCache, oldLdSoPreload := ldSoCache, ldSoPreload
+	ldSoCache, ldSoPreload = loaderCache, preload
+	t.Cleanup(func() {
+		ldSoCache, ldSoPreload = oldLdSoCache, oldLdSoPreload
+	})
+	t.Setenv("LD_LIBRARY_PATH", "")
+	t.Setenv("LD_PRELOAD", "")
+	t.Setenv("GLIBC_TUNABLES", "")
+
+	key := func() string {
+		t.Helper()
+
+		k, ok := depCacheKey(file)
+		if !ok {
+			t.Fatalf("depCacheKey(%q) returned no key", file)
+		}
+
+		return k
+	}
+
+	prev := key()
+	if again := key(); again != prev {
+		t.Fatalf("depCacheKey changed without a change: %q, then %q", prev, again)
+	}
+
+	for _, change := range []struct {
+		name  string
+		apply func() error
+	}{
+		{name: "ld.so.cache", apply: func() error { return os.WriteFile(loaderCache, []byte("v2 longer"), 0o644) }},
+		{name: "LD_LIBRARY_PATH", apply: func() error { return os.Setenv("LD_LIBRARY_PATH", dir) }},
+		{name: "LD_PRELOAD", apply: func() error { return os.Setenv("LD_PRELOAD", file) }},
+		{name: "ld.so.preload", apply: func() error { return os.WriteFile(preload, []byte(file), 0o644) }},
+		{name: "GLIBC_TUNABLES", apply: func() error { return os.Setenv("GLIBC_TUNABLES", "glibc.cpu.hwcaps=-AVX2") }},
+	} {
+		if err := change.apply(); err != nil {
+			t.Fatalf("changing %s: %v", change.name, err)
+		}
+
+		next := key()
+		if next == prev {
+			t.Errorf("depCacheKey did not change with %s", change.name)
+		}
+		prev = next
+	}
+}
+
+// A cached entry that names a library that no longer exists is looked up
+// again rather than served.
+func TestListRefreshesEntryWithMissingLibrary(t *testing.T) {
+	exe := pickDynamicExecutable(t)
+
+	interp, err := GetInterp(exe)
+	if err != nil {
+		t.Fatalf("GetInterp returned error: %v", err)
+	}
+	key, ok := depCacheKey(exe)
+	if !ok {
+		t.Fatalf("depCacheKey(%q) returned no key", exe)
+	}
+
+	missing := filepath.Join(t.TempDir(), "libmoved.so.1")
+	getDepCache().Set(key, depCacheEntry{Interp: interp, SONames: []string{missing}})
+
+	got, err := List(exe)
+	if err != nil {
+		t.Fatalf("List returned error: %v", err)
+	}
+	for _, path := range got {
+		if path == missing {
+			t.Fatalf("List(%q) served the cached missing library %q", exe, missing)
+		}
+	}
+	if len(got) == 0 {
+		t.Fatalf("List(%q) returned no libraries", exe)
+	}
+}

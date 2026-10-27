@@ -43,6 +43,27 @@ type depCacheEntry struct {
 	SONames []string
 }
 
+// librariesExist reports whether every library in a cached entry still exists.
+// A library can move without ldconfig, such as one found through RUNPATH, so
+// an entry that names a missing one is looked up again.
+func librariesExist(paths []string) bool {
+	for _, path := range paths {
+		if _, err := os.Stat(path); err != nil {
+			return false
+		}
+	}
+
+	return true
+}
+
+// ldSoCache is the loader cache, which ldconfig rewrites when libraries are
+// added, removed, or moved, and ldSoPreload lists the libraries the loader
+// preloads into every program.
+var (
+	ldSoCache   = "/etc/ld.so.cache"
+	ldSoPreload = "/etc/ld.so.preload"
+)
+
 // func parseinterp(input string) ([]string, error) {
 // 	scanner := bufio.NewScanner(strings.NewReader(input))
 // 	scanner.Buffer(make([]byte, 1024), 1024*1024)
@@ -203,6 +224,22 @@ func depCacheKey(file string) (string, bool) {
 	builder.WriteString(strconv.FormatInt(info.Size(), 10))
 	builder.WriteByte('|')
 	builder.WriteString(strconv.FormatInt(info.ModTime().UnixNano(), 10))
+
+	// Which libraries the loader picks also depends on its cache, its preload
+	// list and its environment, so an entry from before any of them changed is
+	// stale.
+	for _, path := range []string{ldSoCache, ldSoPreload} {
+		builder.WriteByte('|')
+		if info, err := os.Stat(path); err == nil {
+			builder.WriteString(strconv.FormatInt(info.Size(), 10))
+			builder.WriteByte('|')
+			builder.WriteString(strconv.FormatInt(info.ModTime().UnixNano(), 10))
+		}
+	}
+	for _, name := range []string{"LD_LIBRARY_PATH", "LD_PRELOAD", "GLIBC_TUNABLES"} {
+		builder.WriteByte(0)
+		builder.WriteString(os.Getenv(name))
+	}
 
 	return builder.String(), true
 }
@@ -378,7 +415,7 @@ func List(names ...string) ([]string, error) {
 				if key, ok := depCacheKey(n); ok {
 					cacheKey = key
 					if cached, found := cache.Get(cacheKey); found {
-						if cached.Interp != "" {
+						if cached.Interp != "" && librariesExist(cached.SONames) {
 							results <- listResult{interp: cached.Interp, sonames: cached.SONames}
 							continue
 						}
