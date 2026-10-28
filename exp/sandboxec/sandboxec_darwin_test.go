@@ -15,6 +15,7 @@ import (
 
 	"go.dw1.io/x/exp/sandboxec/access"
 	"go.dw1.io/x/exp/sandboxec/internal/config"
+	"go.dw1.io/x/exp/sandboxec/internal/seatbelt"
 )
 
 func subprocessDarwin(scenario string, env map[string]string) ([]byte, error) {
@@ -52,11 +53,11 @@ func TestDarwinInvalidOptionErrors(t *testing.T) {
 func TestDarwinSeatbeltPolicyNetworkDeniedByDefault(t *testing.T) {
 	policy := seatbeltPolicy(&config.Config{})
 
-	if !strings.Contains(policy, "(deny network-inbound)") {
+	if !slices.Contains(policy, seatbelt.Deny(seatbelt.NetworkInbound, seatbelt.All)) {
 		t.Fatalf("policy must deny inbound network by default, got:\n%s", policy)
 	}
 
-	if !strings.Contains(policy, "(deny network-outbound)") {
+	if !slices.Contains(policy, seatbelt.Deny(seatbelt.NetworkOutbound, seatbelt.All)) {
 		t.Fatalf("policy must deny outbound network by default, got:\n%s", policy)
 	}
 }
@@ -64,8 +65,13 @@ func TestDarwinSeatbeltPolicyNetworkDeniedByDefault(t *testing.T) {
 func TestDarwinSeatbeltPolicyFSDeniedByDefault(t *testing.T) {
 	policy := seatbeltPolicy(&config.Config{})
 
-	for _, want := range []string{"(deny file-read*)", "(deny file-write*)", "(deny file-map-executable)", "(deny process-exec*)"} {
-		if !strings.Contains(policy, want) {
+	for _, want := range []seatbelt.Rule{
+		seatbelt.Deny(seatbelt.FileRead, seatbelt.All),
+		seatbelt.Deny(seatbelt.FileWrite, seatbelt.All),
+		seatbelt.Deny(seatbelt.FileMapExecutable, seatbelt.All),
+		seatbelt.Deny(seatbelt.ProcessExec, seatbelt.All),
+	} {
+		if !slices.Contains(policy, want) {
 			t.Fatalf("policy without rules must contain %q, got:\n%s", want, policy)
 		}
 	}
@@ -76,8 +82,13 @@ func TestDarwinSeatbeltPolicyNetworkOnlyDeniesFS(t *testing.T) {
 	cfg.NetRules = append(cfg.NetRules, config.NetRule{Port: 443, Rights: access.NETWORK_CONNECT_TCP})
 	policy := seatbeltPolicy(&cfg)
 
-	for _, want := range []string{"(deny file-read*)", "(deny file-write*)", "(deny file-map-executable)", "(deny process-exec*)"} {
-		if !strings.Contains(policy, want) {
+	for _, want := range []seatbelt.Rule{
+		seatbelt.Deny(seatbelt.FileRead, seatbelt.All),
+		seatbelt.Deny(seatbelt.FileWrite, seatbelt.All),
+		seatbelt.Deny(seatbelt.FileMapExecutable, seatbelt.All),
+		seatbelt.Deny(seatbelt.ProcessExec, seatbelt.All),
+	} {
+		if !slices.Contains(policy, want) {
 			t.Fatalf("network-only policy must contain %q, got:\n%s", want, policy)
 		}
 	}
@@ -88,26 +99,26 @@ func TestDarwinSeatbeltPolicyFSExecDeniedThenAllowlists(t *testing.T) {
 	cfg.FSRules = append(cfg.FSRules, config.FSRule{Path: "/usr", Rights: access.FS_READ_EXEC})
 	policy := seatbeltPolicy(&cfg)
 
-	if !strings.Contains(policy, "(deny file-map-executable)") {
+	if !slices.Contains(policy, seatbelt.Deny(seatbelt.FileMapExecutable, seatbelt.All)) {
 		t.Fatalf("policy must deny file-map-executable when fs rules are present, got:\n%s", policy)
 	}
 
-	if !strings.Contains(policy, `(allow file-map-executable (subpath "/usr"))`) {
+	if !slices.Contains(policy, seatbelt.Allow(seatbelt.FileMapExecutable, seatbelt.Subpath("/usr"))) {
 		t.Fatalf("policy must allowlist executable mapping for explicit FS_READ_EXEC rules, got:\n%s", policy)
 	}
 }
 
 func TestDarwinSeatbeltPolicyFSRightsAreExact(t *testing.T) {
-	ops := []string{"file-read*", "file-write*", "file-map-executable", "process-exec*"}
+	ops := []seatbelt.Operation{seatbelt.FileRead, seatbelt.FileWrite, seatbelt.FileMapExecutable, seatbelt.ProcessExec}
 	tests := []struct {
 		name    string
 		rights  access.FS
-		allowed []string
+		allowed []seatbelt.Operation
 	}{
-		{name: "read", rights: access.FS_READ, allowed: []string{"file-read*"}},
-		{name: "read_exec", rights: access.FS_READ_EXEC, allowed: []string{"file-read*", "file-map-executable", "process-exec*"}},
-		{name: "write", rights: access.FS_WRITE, allowed: []string{"file-write*"}},
-		{name: "read_write", rights: access.FS_READ_WRITE, allowed: []string{"file-read*", "file-write*"}},
+		{name: "read", rights: access.FS_READ, allowed: []seatbelt.Operation{seatbelt.FileRead}},
+		{name: "read_exec", rights: access.FS_READ_EXEC, allowed: []seatbelt.Operation{seatbelt.FileRead, seatbelt.FileMapExecutable, seatbelt.ProcessExec}},
+		{name: "write", rights: access.FS_WRITE, allowed: []seatbelt.Operation{seatbelt.FileWrite}},
+		{name: "read_write", rights: access.FS_READ_WRITE, allowed: []seatbelt.Operation{seatbelt.FileRead, seatbelt.FileWrite}},
 		{name: "read_write_exec", rights: access.FS_READ_WRITE_EXEC, allowed: ops},
 	}
 
@@ -119,12 +130,41 @@ func TestDarwinSeatbeltPolicyFSRightsAreExact(t *testing.T) {
 
 			for _, op := range ops {
 				want := slices.Contains(tt.allowed, op)
-				got := strings.Contains(policy, `(allow `+op+` (subpath "/x"))`)
+				got := slices.Contains(policy, seatbelt.Allow(op, seatbelt.Subpath("/x")))
 				if got != want {
 					t.Errorf("%s allowed = %v, want %v; policy:\n%s", op, got, want, policy)
 				}
 			}
 		})
+	}
+}
+
+// An allow overrides the denial of its own operation only by coming after it.
+func TestDarwinSeatbeltPolicyAllowsFollowDenials(t *testing.T) {
+	var cfg config.Config
+	cfg.FSRules = append(cfg.FSRules, config.FSRule{Path: "/x", Rights: access.FS_READ_WRITE_EXEC})
+	cfg.NetRules = append(cfg.NetRules, config.NetRule{Port: 8443, Rights: access.NETWORK_BIND_TCP | access.NETWORK_CONNECT_TCP})
+	policy := seatbeltPolicy(&cfg)
+
+	subtree := seatbelt.Subpath("/x")
+	tests := []struct {
+		op     seatbelt.Operation
+		filter seatbelt.Filter
+	}{
+		{op: seatbelt.FileRead, filter: subtree},
+		{op: seatbelt.FileWrite, filter: subtree},
+		{op: seatbelt.FileMapExecutable, filter: subtree},
+		{op: seatbelt.ProcessExec, filter: subtree},
+		{op: seatbelt.NetworkInbound, filter: seatbelt.LocalTCP(8443)},
+		{op: seatbelt.NetworkOutbound, filter: seatbelt.RemoteTCP(8443)},
+	}
+
+	for _, tt := range tests {
+		deny := slices.Index(policy, seatbelt.Deny(tt.op, seatbelt.All))
+		allow := slices.Index(policy, seatbelt.Allow(tt.op, tt.filter))
+		if deny < 0 || allow < deny {
+			t.Errorf("%s: denial at %d, allow at %d, want the allow after the denial; policy:\n%s", tt.op, deny, allow, policy)
+		}
 	}
 }
 
