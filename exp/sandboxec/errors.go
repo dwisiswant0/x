@@ -20,7 +20,8 @@ var ErrUnavailable = errors.New("sandbox is unavailable")
 var ErrLandlockUnavailable error = unavailableError("landlock is unavailable")
 
 // ErrSeatbeltUnavailable indicates that macOS Seatbelt sandboxing is unavailable
-// or failed to initialize. It matches [ErrUnavailable].
+// or failed to initialize, including when the process already has a different
+// Seatbelt policy. It matches [ErrUnavailable].
 //
 // It can be wrapped in enforcement errors.
 var ErrSeatbeltUnavailable error = unavailableError("seatbelt is unavailable")

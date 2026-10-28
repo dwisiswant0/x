@@ -55,6 +55,8 @@ func TestHelperProcessDarwin(t *testing.T) {
 		err = helperDarwinTouchDenied()
 	case "fs-path-injection":
 		err = helperDarwinFSPathInjection()
+	case "one-policy-per-process":
+		err = helperDarwinOnePolicyPerProcess()
 	default:
 		fmt.Fprintf(os.Stderr, "unknown darwin scenario: %s\n", scenario)
 		os.Exit(2)
@@ -382,4 +384,42 @@ func sameExitSignalDarwin(a, b error) bool {
 	}
 
 	return aStatus.Signal() == bStatus.Signal()
+}
+
+// helperDarwinOnePolicyPerProcess enforces broad rules, then tries a second
+// Sandboxec with the same rules and one with narrower rules. SANDBOXEC_FILE
+// is readable under the broad rules only.
+func helperDarwinOnePolicyPerProcess() error {
+	file := os.Getenv("SANDBOXEC_FILE")
+	broad := []Option{
+		WithFSRule("/", access.FS_READ_EXEC),
+		WithFSRule("/dev/null", access.FS_READ_WRITE),
+	}
+	narrow := []Option{
+		WithFSRule("/usr", access.FS_READ_EXEC),
+		WithFSRule("/bin", access.FS_READ_EXEC),
+		WithFSRule("/dev/null", access.FS_READ_WRITE),
+	}
+
+	if cmd := New(broad...).Command("/usr/bin/true"); cmd.Err != nil {
+		return fmt.Errorf("enforce failed: %w", cmd.Err)
+	}
+
+	if cmd := New(broad...).Command("/usr/bin/true"); cmd.Err != nil {
+		return fmt.Errorf("expected identical rules to succeed, got %w", cmd.Err)
+	}
+
+	if cmd := New(narrow...).Command("/bin/cat", file); !errors.Is(cmd.Err, ErrSeatbeltUnavailable) {
+		return fmt.Errorf("expected different rules to fail with ErrSeatbeltUnavailable, got %v", cmd.Err)
+	}
+
+	cmd := New(append(narrow, WithBestEffort())...).Command("/bin/cat", file)
+	if cmd.Err != nil {
+		return fmt.Errorf("expected WithBestEffort to ignore the failure, got %w", cmd.Err)
+	}
+	if out, err := cmd.Output(); err != nil || string(out) != "sandboxec-secret\n" {
+		return fmt.Errorf("expected the command to run under the first policy and read the file, got %v: %q", err, out)
+	}
+
+	return nil
 }

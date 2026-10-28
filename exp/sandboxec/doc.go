@@ -31,4 +31,8 @@
 //     platform.
 //   - WithUnsafeHostRuntime expands host runtime access from PATH-derived
 //     targets and dynamic-linker dependency files.
+//   - On Darwin, a process holds one Seatbelt policy. A Sandboxec whose rules
+//     differ from the policy already enforced fails with
+//     [ErrSeatbeltUnavailable]. With [WithBestEffort], that failure is ignored,
+//     and that Sandboxec's commands run under the first policy.
 package sandboxec
