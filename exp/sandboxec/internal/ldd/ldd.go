@@ -86,65 +86,25 @@ func parseinterpScanner(scanner *bufio.Scanner) []string {
 }
 
 func parseinterpLine(line string) (string, bool) {
-	n := len(line)
-	i := 0
-
-	nextToken := func() (string, bool) {
-		for i < n {
-			c := line[i]
-			if c != ' ' && c != '\t' {
-				break
-			}
-			i++
-		}
-
-		if i >= n {
-			return "", false
-		}
-
-		start := i
-		for i < n {
-			c := line[i]
-			if c == ' ' || c == '\t' {
-				break
-			}
-			i++
-		}
-
-		return line[start:i], true
-	}
-
-	tok0, ok := nextToken()
+	// A loaded library reads "name => path (0xaddress)". The path runs to the
+	// address, since it may contain spaces.
+	name, path, ok := strings.Cut(strings.TrimSpace(line), " => ")
 	if !ok {
 		return "", false
 	}
-
-	tok1, ok := nextToken()
-	if !ok {
-		return "", false
+	if i := strings.LastIndex(path, " (0x"); i >= 0 {
+		path = path[:i]
 	}
-
-	tok2, ok := nextToken()
-	if !ok || len(tok2) == 0 {
-		return "", false
-	}
-
-	if tok1 != "=>" {
-		return "", false
-	}
-
-	if tok0 == tok2 {
-		return "", false
-	}
+	path = strings.TrimSpace(path)
 
 	// Only an absolute path names a loaded file. Skip a memory address, as in
 	// linux-vdso.so.1 => (0x00007ffe4972d000), and a missing library, as in
 	// libfoo.so.1 => not found, whose "not" would read as a relative path.
-	if tok2[0] != '/' {
+	if !strings.HasPrefix(path, "/") || path == name {
 		return "", false
 	}
 
-	return tok2, true
+	return path, true
 }
 
 // runinterp runs the interpreter with the --list switch

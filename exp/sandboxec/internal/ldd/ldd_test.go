@@ -103,6 +103,10 @@ func TestParseinterpLine(t *testing.T) {
 		{line: "\tlibfoo.so.1 => not found"},
 		{line: "\t/lib64/ld-linux-x86-64.so.2 => /lib64/ld-linux-x86-64.so.2 (0x00007f0000000000)"},
 		{line: "\tnot a dynamic executable"},
+		{line: "\tlibfoo.so.1 => /opt/My App/lib/libfoo.so.1 (0x00007f0000000000)", want: "/opt/My App/lib/libfoo.so.1", ok: true},
+		{line: "\tlibbar.so.1 => /opt/lib/libbar.so.1", want: "/opt/lib/libbar.so.1", ok: true},
+		{line: "\tlinux-vdso.so.1 (0x00007ffe4972d000)"},
+		{line: "\t/lib64/ld-linux-x86-64.so.2 (0x00007f0000000000)"},
 	}
 
 	for _, tt := range tests {
