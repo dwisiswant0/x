@@ -8,8 +8,9 @@ import "go.dw1.io/x/exp/sandboxec/internal/macho"
 
 // GetLinkersFiles returns dynamic-linker dependency files for one file path.
 //
-// It parses Mach-O load commands and returns absolute dependency paths that
-// currently exist on disk. It returns an empty slice for an empty input path.
+// It parses Mach-O load commands and returns the paths of the dylibs on disk
+// that the file depends on, directly or through other dylibs. It returns an
+// empty slice for an empty input path.
 func GetLinkersFiles(f string) ([]string, error) {
 	if f == "" {
 		return nil, nil

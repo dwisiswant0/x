@@ -83,7 +83,8 @@ func WithNetworkRule(port uint16, rights access.Network) Option {
 // It may broaden sandbox access.
 //
 // Files it cannot use, such as scripts or libraries that no longer exist or
-// cannot be read, are skipped. On Linux, the option fails with
+// cannot be read, are skipped. So is a dependency path that is not a shared
+// library, even if a program names it as one. On Linux, the option fails with
 // [ErrInvalidOption] if the path of a library it found cannot be inspected.
 func WithUnsafeHostRuntime() Option {
 	return func(cfg *config.Config) error {
