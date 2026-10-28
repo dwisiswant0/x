@@ -19,6 +19,8 @@ As on Linux, running a file as a program requires `FS_READ_EXEC` or `FS_READ_WRI
 
 When filesystem access is restricted, the policy also allows reading the root directory entry (`/`) itself, which dyld needs to start any process. Rule paths are resolved through symlinks, because Seatbelt matches resolved paths (for example, `/tmp` is `/private/tmp`), and the metadata of each symlink traversed to reach them is made readable so commands can still use the original path.
 
+A process holds one Seatbelt policy. Once a `Sandboxec` has enforced its rules, another `Sandboxec` with different rules fails with `ErrSeatbeltUnavailable`. With `WithBestEffort`, that failure is ignored, and the second `Sandboxec`'s commands run under the first policy. A `Sandboxec` with identical rules succeeds, because its policy is already in place.
+
 ```go
 sb := sandboxec.New(
     sandboxec.WithFSRule("/usr", access.FS_READ_EXEC),

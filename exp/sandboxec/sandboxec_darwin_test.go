@@ -217,3 +217,9 @@ func TestDarwinRulePathCannotInjectPolicy(t *testing.T) {
 
 	runHelperDarwin(t, "fs-path-injection", map[string]string{"SANDBOXEC_DIR": dir})
 }
+
+// A process holds one Seatbelt policy, so a later Sandboxec with different
+// rules can neither replace nor narrow it.
+func TestDarwinOnePolicyPerProcess(t *testing.T) {
+	runHelperDarwin(t, "one-policy-per-process", map[string]string{"SANDBOXEC_FILE": outsideFile(t)})
+}
