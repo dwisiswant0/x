@@ -13,11 +13,14 @@ import (
 	"bufio"
 	"bytes"
 	"debug/elf"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -41,6 +44,27 @@ type depCacheEntry struct {
 	SONames []string
 }
 
+// librariesExist reports whether every library in a cached entry still exists.
+// A library can move without ldconfig, such as one found through RUNPATH, so
+// an entry that names a missing one is looked up again.
+func librariesExist(paths []string) bool {
+	for _, path := range paths {
+		if _, err := os.Stat(path); err != nil {
+			return false
+		}
+	}
+
+	return true
+}
+
+// ldSoCache is the loader cache, which ldconfig rewrites when libraries are
+// added, removed, or moved, and ldSoPreload lists the libraries the loader
+// preloads into every program.
+var (
+	ldSoCache   = "/etc/ld.so.cache"
+	ldSoPreload = "/etc/ld.so.preload"
+)
+
 // func parseinterp(input string) ([]string, error) {
 // 	scanner := bufio.NewScanner(strings.NewReader(input))
 // 	scanner.Buffer(make([]byte, 1024), 1024*1024)
@@ -62,65 +86,25 @@ func parseinterpScanner(scanner *bufio.Scanner) []string {
 }
 
 func parseinterpLine(line string) (string, bool) {
-	n := len(line)
-	i := 0
-
-	nextToken := func() (string, bool) {
-		for i < n {
-			c := line[i]
-			if c != ' ' && c != '\t' {
-				break
-			}
-			i++
-		}
-
-		if i >= n {
-			return "", false
-		}
-
-		start := i
-		for i < n {
-			c := line[i]
-			if c == ' ' || c == '\t' {
-				break
-			}
-			i++
-		}
-
-		return line[start:i], true
-	}
-
-	tok0, ok := nextToken()
+	// A loaded library reads "name => path (0xaddress)". The path runs to the
+	// address, since it may contain spaces.
+	name, path, ok := strings.Cut(strings.TrimSpace(line), " => ")
 	if !ok {
 		return "", false
 	}
+	if i := strings.LastIndex(path, " (0x"); i >= 0 {
+		path = path[:i]
+	}
+	path = strings.TrimSpace(path)
 
-	tok1, ok := nextToken()
-	if !ok {
+	// Only an absolute path names a loaded file. Skip a memory address, as in
+	// linux-vdso.so.1 => (0x00007ffe4972d000), and a missing library, as in
+	// libfoo.so.1 => not found, whose "not" would read as a relative path.
+	if !strings.HasPrefix(path, "/") || path == name {
 		return "", false
 	}
 
-	tok2, ok := nextToken()
-	if !ok || len(tok2) == 0 {
-		return "", false
-	}
-
-	if tok1 != "=>" {
-		return "", false
-	}
-
-	if tok0 == tok2 {
-		return "", false
-	}
-
-	// If the third part is a memory address instead
-	// of a file system path, the entry should be skipped.
-	// For example: linux-vdso.so.1 => (0x00007ffe4972d000)
-	if tok2[0] == '(' {
-		return "", false
-	}
-
-	return tok2, true
+	return path, true
 }
 
 // runinterp runs the interpreter with the --list switch
@@ -201,6 +185,22 @@ func depCacheKey(file string) (string, bool) {
 	builder.WriteString(strconv.FormatInt(info.Size(), 10))
 	builder.WriteByte('|')
 	builder.WriteString(strconv.FormatInt(info.ModTime().UnixNano(), 10))
+
+	// Which libraries the loader picks also depends on its cache, its preload
+	// list and its environment, so an entry from before any of them changed is
+	// stale.
+	for _, path := range []string{ldSoCache, ldSoPreload} {
+		builder.WriteByte('|')
+		if info, err := os.Stat(path); err == nil {
+			builder.WriteString(strconv.FormatInt(info.Size(), 10))
+			builder.WriteByte('|')
+			builder.WriteString(strconv.FormatInt(info.ModTime().UnixNano(), 10))
+		}
+	}
+	for _, name := range []string{"LD_LIBRARY_PATH", "LD_PRELOAD", "GLIBC_TUNABLES"} {
+		builder.WriteByte(0)
+		builder.WriteString(os.Getenv(name))
+	}
 
 	return builder.String(), true
 }
@@ -283,6 +283,11 @@ func GetInterp(file string) (string, error) {
 
 // follow returns all paths and any files they recursively point to through
 // symlinks.
+//
+// A path or link target that does not exist ends that chain without error, so
+// a stale library entry does not abort the whole batch. So does a chain that
+// loops or has more links than the kernel follows. The links of such a chain
+// are dropped too, since the path they were followed from cannot be opened.
 func follow(paths ...string) ([]string, error) {
 	seen := make(map[string]struct{})
 
@@ -299,19 +304,51 @@ func follow(paths ...string) ([]string, error) {
 	return deps, nil
 }
 
+// maxSymlinks is the most symlinks the kernel follows when opening a path, its
+// MAXSYMLINKS. One more, or a loop, fails with ELOOP.
+const maxSymlinks = 40
+
 func followInternal(path string, seen map[string]struct{}) error {
+	start := path
+	var added []string
+	drop := func() error {
+		for _, link := range added {
+			delete(seen, link)
+		}
+		return nil
+	}
+	// keep checks that start opens before keeping its chain. The kernel also
+	// counts symlinks in directory components, and in the part of the chain
+	// that an earlier path already followed, which this walk does not see.
+	keep := func() error {
+		if _, err := os.Stat(start); err != nil {
+			return drop()
+		}
+		return nil
+	}
+
 	for {
 		if _, ok := seen[path]; ok {
-			return nil
+			if slices.Contains(added, path) {
+				return drop()
+			}
+			return keep()
 		}
 		i, err := os.Lstat(path)
+		if errors.Is(err, fs.ErrNotExist) {
+			return drop()
+		}
 		if err != nil {
 			return err
 		}
 
 		seen[path] = struct{}{}
+		added = append(added, path)
 		if i.Mode().IsRegular() {
-			return nil
+			return keep()
+		}
+		if len(added) > maxSymlinks {
+			return drop()
 		}
 
 		// If it's a symlink, read works; if not, it fails.
@@ -364,7 +401,7 @@ func List(names ...string) ([]string, error) {
 				if key, ok := depCacheKey(n); ok {
 					cacheKey = key
 					if cached, found := cache.Get(cacheKey); found {
-						if cached.Interp != "" {
+						if cached.Interp != "" && librariesExist(cached.SONames) {
 							results <- listResult{interp: cached.Interp, sonames: cached.SONames}
 							continue
 						}
