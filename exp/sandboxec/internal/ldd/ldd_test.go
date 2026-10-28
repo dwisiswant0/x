@@ -3,6 +3,8 @@
 package ldd
 
 import (
+	"bytes"
+	"debug/elf"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,16 +12,19 @@ import (
 	"testing"
 )
 
-func pickDynamicExecutable(t *testing.T) string {
-	t.Helper()
-
+func candidateExecutables() []string {
 	candidates := make([]string, 0, 4)
 	if exe, err := os.Executable(); err == nil {
 		candidates = append(candidates, exe)
 	}
-	candidates = append(candidates, "/bin/sh", "/usr/bin/env", "/bin/ls")
 
-	for _, candidate := range candidates {
+	return append(candidates, "/bin/sh", "/usr/bin/env", "/bin/ls")
+}
+
+func pickDynamicExecutable(t *testing.T) string {
+	t.Helper()
+
+	for _, candidate := range candidateExecutables() {
 		interp, err := GetInterp(candidate)
 		if err != nil {
 			continue
@@ -365,4 +370,138 @@ func TestListSkipsFilesThatAreNotLibraries(t *testing.T) {
 	if !slices.Contains(got, libs[0]) {
 		t.Errorf("List(%q) = %q, missing library %q", exe, got, libs[0])
 	}
+}
+
+// The loader finds the dynamic table through the program headers, so removing
+// the section headers, as sstrip does, leaves a program a program and a
+// library a library, while a shared object without a dynamic table is no
+// library at all.
+func TestIsLibraryReadsTheDynamicSegment(t *testing.T) {
+	exe := pickPIE(t)
+
+	interp, err := GetInterp(exe)
+	if err != nil {
+		t.Fatalf("GetInterp returned error: %v", err)
+	}
+	libs, err := runinterp(interp, exe)
+	if err != nil || len(libs) == 0 {
+		t.Fatalf("runinterp(%q, %q) = %q, %v, want libraries", interp, exe, libs, err)
+	}
+
+	dir := t.TempDir()
+	tests := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{name: "program", path: exe},
+		{name: "program without section headers", path: withoutSectionHeaders(t, exe, filepath.Join(dir, "program"))},
+		{name: "library", path: libs[0], want: true},
+		{name: "library without section headers", path: withoutSectionHeaders(t, libs[0], filepath.Join(dir, "library")), want: true},
+		{name: "library without a dynamic segment", path: withoutDynamicSegment(t, libs[0], filepath.Join(dir, "nodynamic"))},
+	}
+	for _, tt := range tests {
+		if got := isLibrary(tt.path); got != tt.want {
+			t.Errorf("isLibrary(%s) = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
+// pickPIE returns a dynamically linked executable whose section headers mark
+// it as position-independent. The test binary is not one under -race.
+func pickPIE(t *testing.T) string {
+	t.Helper()
+
+	for _, candidate := range candidateExecutables() {
+		if interp, err := GetInterp(candidate); err != nil || interp == "" {
+			continue
+		}
+
+		f, err := elf.Open(candidate)
+		if err != nil {
+			continue
+		}
+		flags, err := f.DynValue(elf.DT_FLAGS_1)
+		_ = f.Close()
+		if err == nil && slices.ContainsFunc(flags, func(flag uint64) bool { return elf.DynFlag1(flag)&elf.DF_1_PIE != 0 }) {
+			return candidate
+		}
+	}
+
+	t.Skip("no position-independent executable found on this host")
+	return ""
+}
+
+// withoutSectionHeaders writes a copy of the ELF file at path to copyPath with
+// its section header table removed, as sstrip does, and returns copyPath.
+func withoutSectionHeaders(t *testing.T, path, copyPath string) string {
+	t.Helper()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile returned error: %v", err)
+	}
+
+	// Clear e_shoff, and e_shnum and e_shstrndx, which follow e_shentsize.
+	shoff, shoffSize, shnum := 0x28, 8, 0x3c
+	if elf.Class(data[elf.EI_CLASS]) == elf.ELFCLASS32 {
+		shoff, shoffSize, shnum = 0x20, 4, 0x30
+	}
+	clear(data[shoff : shoff+shoffSize])
+	clear(data[shnum : shnum+4])
+	if err := os.WriteFile(copyPath, data, 0o755); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	f, err := elf.Open(copyPath)
+	if err != nil {
+		t.Fatalf("elf.Open(%q) returned error: %v", copyPath, err)
+	}
+	defer func() {
+		_ = f.Close()
+	}()
+	if len(f.Sections) != 0 {
+		t.Fatalf("%s still has %d sections", copyPath, len(f.Sections))
+	}
+
+	return copyPath
+}
+
+// withoutDynamicSegment writes a copy of the ELF file at path to copyPath with
+// its PT_DYNAMIC program header turned into PT_NULL, and returns copyPath.
+func withoutDynamicSegment(t *testing.T, path, copyPath string) string {
+	t.Helper()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile returned error: %v", err)
+	}
+	f, err := elf.NewFile(bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("elf.NewFile returned error: %v", err)
+	}
+
+	// Find the program headers from e_phoff, e_phentsize and e_phnum.
+	order := f.ByteOrder
+	phoff, entsize, num := order.Uint64(data[0x20:]), int(order.Uint16(data[0x36:])), int(order.Uint16(data[0x38:]))
+	if f.Class == elf.ELFCLASS32 {
+		phoff, entsize, num = uint64(order.Uint32(data[0x1c:])), int(order.Uint16(data[0x2a:])), int(order.Uint16(data[0x2c:]))
+	}
+	found := false
+	for i := range num {
+		header := data[int(phoff)+i*entsize:]
+		if elf.ProgType(order.Uint32(header)) == elf.PT_DYNAMIC {
+			order.PutUint32(header, uint32(elf.PT_NULL))
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("%s has no PT_DYNAMIC program header", path)
+	}
+
+	if err := os.WriteFile(copyPath, data, 0o755); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	return copyPath
 }

@@ -15,6 +15,7 @@ import (
 	"debug/elf"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -479,7 +480,8 @@ func List(names ...string) ([]string, error) {
 }
 
 // isLibrary reports whether path opens as a file the loader would map as a
-// library: an ELF shared object that is not a position-independent executable.
+// library: an ELF shared object with a dynamic table that does not mark it as
+// a position-independent executable.
 func isLibrary(path string) bool {
 	f, err := elf.Open(path)
 	if err != nil {
@@ -492,17 +494,63 @@ func isLibrary(path string) bool {
 	if f.Type != elf.ET_DYN {
 		return false
 	}
-	flags, err := f.DynValue(elf.DT_FLAGS_1)
-	if err != nil {
-		return false
-	}
-	for _, flag := range flags {
-		if elf.DynFlag1(flag)&elf.DF_1_PIE != 0 {
-			return false
+	flags, ok := dynamicFlags1(f)
+
+	return ok && flags&elf.DF_1_PIE == 0
+}
+
+// dynamicFlags1 returns the DT_FLAGS_1 value of the dynamic table of f, and
+// whether f has a table the loader would read. Like the loader, it finds the
+// table through the program headers, since section headers can be removed:
+// it uses the last PT_DYNAMIC, refuses a file with an empty one, and reads
+// the table up to its DT_NULL entry. It reads the table from the file at
+// p_offset, where the loader reads it from memory at p_vaddr; the two differ
+// only in a file made to differ.
+func dynamicFlags1(f *elf.File) (elf.DynFlag1, bool) {
+	var dynamic *elf.Prog
+	for _, prog := range f.Progs {
+		if prog.Type != elf.PT_DYNAMIC {
+			continue
 		}
+		if prog.Filesz == 0 {
+			return 0, false
+		}
+		dynamic = prog
+	}
+	if dynamic == nil {
+		return 0, false
 	}
 
-	return true
+	size := 16 // sizeof(Elf64_Dyn)
+	if f.Class == elf.ELFCLASS32 {
+		size = 8
+	}
+	entry := make([]byte, size)
+	r := bufio.NewReader(dynamic.Open())
+
+	var flags elf.DynFlag1
+	for {
+		if _, err := io.ReadFull(r, entry); err != nil {
+			return 0, false
+		}
+
+		// The tag stays 64 bits wide: elf.DynTag is an int, which is 32 bits
+		// wide on some platforms.
+		var tag int64
+		var value uint64
+		if f.Class == elf.ELFCLASS32 {
+			tag, value = int64(int32(f.ByteOrder.Uint32(entry))), uint64(f.ByteOrder.Uint32(entry[4:]))
+		} else {
+			tag, value = int64(f.ByteOrder.Uint64(entry)), f.ByteOrder.Uint64(entry[8:])
+		}
+
+		switch tag {
+		case int64(elf.DT_NULL):
+			return flags, true
+		case int64(elf.DT_FLAGS_1):
+			flags = elf.DynFlag1(value)
+		}
+	}
 }
 
 // FList returns a list of all library dependencies for a set of files,
