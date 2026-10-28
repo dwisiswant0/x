@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"go.dw1.io/x/exp/sandboxec/access"
+	"go.dw1.io/x/exp/sandboxec/internal/seatbelt"
 )
 
 func TestHelperProcessDarwin(t *testing.T) {
@@ -151,7 +152,8 @@ func helperDarwinCommandCtxCancel() error {
 }
 
 func helperDarwinSeatbeltProbeReportsPolicyError() error {
-	err := applySeatbelt("(", 0)
+	// sandbox_init rejects an operation it does not know.
+	err := applySeatbelt(seatbelt.Policy{seatbelt.Deny("no-such-operation", seatbelt.All)})
 	if !errors.Is(err, ErrSeatbeltUnavailable) {
 		return fmt.Errorf("expected invalid policy to fail with ErrSeatbeltUnavailable, got %v", err)
 	}

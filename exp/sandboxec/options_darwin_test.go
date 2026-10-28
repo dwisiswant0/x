@@ -10,11 +10,11 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 
 	"go.dw1.io/x/exp/sandboxec/access"
 	"go.dw1.io/x/exp/sandboxec/internal/config"
+	"go.dw1.io/x/exp/sandboxec/internal/seatbelt"
 )
 
 func TestDarwinWithFSRuleValidationAndCleanPath(t *testing.T) {
@@ -40,7 +40,7 @@ func TestDarwinWithFSRuleValidationAndCleanPath(t *testing.T) {
 	}
 
 	policy := seatbeltPolicy(&cfg)
-	if want := `(allow file-read* (subpath "/nonexistent-sandboxec/x"))`; !strings.Contains(policy, want) {
+	if want := seatbelt.Allow(seatbelt.FileRead, seatbelt.Subpath("/nonexistent-sandboxec/x")); !slices.Contains(policy, want) {
 		t.Fatalf("policy missing %q for rule path %q:\n%s", want, inputPath, policy)
 	}
 }
@@ -168,10 +168,10 @@ func TestDarwinSeatbeltPolicyDotDotAfterSymlink(t *testing.T) {
 
 	cfg := config.Config{FSRules: []config.FSRule{{Path: rulePath, Rights: access.FS_READ}}}
 	policy := seatbeltPolicy(&cfg)
-	if grant := `(allow file-read* (subpath "` + root + `"))`; strings.Contains(policy, grant) {
+	if grant := seatbelt.Allow(seatbelt.FileRead, seatbelt.Subpath(root)); slices.Contains(policy, grant) {
 		t.Fatalf("policy grants the directory holding the symlink:\n%s", policy)
 	}
-	if grant := `(allow file-read* (subpath "` + want + `"))`; !strings.Contains(policy, grant) {
+	if grant := seatbelt.Allow(seatbelt.FileRead, seatbelt.Subpath(want)); !slices.Contains(policy, grant) {
 		t.Fatalf("policy missing %q:\n%s", grant, policy)
 	}
 }
@@ -259,21 +259,21 @@ func TestDarwinSeatbeltPolicyFromRules(t *testing.T) {
 
 	policy := seatbeltPolicy(&cfg)
 
-	checks := []string{
-		"(deny file-read*)",
-		"(deny file-write*)",
-		"(deny file-map-executable)",
+	checks := []seatbelt.Rule{
+		seatbelt.Deny(seatbelt.FileRead, seatbelt.All),
+		seatbelt.Deny(seatbelt.FileWrite, seatbelt.All),
+		seatbelt.Deny(seatbelt.FileMapExecutable, seatbelt.All),
 		// /tmp is a symlink to /private/tmp, the path Seatbelt matches.
-		`(allow file-read* (subpath "/private/tmp"))`,
-		`(allow file-map-executable (subpath "/private/tmp"))`,
-		"(deny network-inbound)",
-		"(deny network-outbound)",
-		`(allow network-inbound (local tcp "*:8443"))`,
-		`(allow network-outbound (remote tcp "*:8443"))`,
+		seatbelt.Allow(seatbelt.FileRead, seatbelt.Subpath("/private/tmp")),
+		seatbelt.Allow(seatbelt.FileMapExecutable, seatbelt.Subpath("/private/tmp")),
+		seatbelt.Deny(seatbelt.NetworkInbound, seatbelt.All),
+		seatbelt.Deny(seatbelt.NetworkOutbound, seatbelt.All),
+		seatbelt.Allow(seatbelt.NetworkInbound, seatbelt.LocalTCP(8443)),
+		seatbelt.Allow(seatbelt.NetworkOutbound, seatbelt.RemoteTCP(8443)),
 	}
 
 	for _, want := range checks {
-		if !strings.Contains(policy, want) {
+		if !slices.Contains(policy, want) {
 			t.Fatalf("policy missing %q:\n%s", want, policy)
 		}
 	}

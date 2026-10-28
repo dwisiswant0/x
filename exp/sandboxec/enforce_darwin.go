@@ -13,12 +13,11 @@ import (
 
 	"go.dw1.io/x/exp/sandboxec/access"
 	"go.dw1.io/x/exp/sandboxec/internal/config"
+	"go.dw1.io/x/exp/sandboxec/internal/seatbelt"
 )
 
 func (s *Sandboxec) enforce() error {
-	policy := seatbeltPolicy(&s.cfg)
-
-	if err := applySeatbelt(policy, 0); err != nil {
+	if err := applySeatbelt(seatbeltPolicy(&s.cfg)); err != nil {
 		if s.cfg.BestEffort {
 			return nil
 		}
@@ -29,18 +28,30 @@ func (s *Sandboxec) enforce() error {
 	return nil
 }
 
-func seatbeltPolicy(cfg *config.Config) string {
+// applySeatbelt sandboxes the current process with policy and reports any
+// failure as ErrSeatbeltUnavailable.
+func applySeatbelt(policy seatbelt.Policy) error {
+	if err := seatbelt.Apply(policy); err != nil {
+		return fmt.Errorf("%w: %v", ErrSeatbeltUnavailable, err)
+	}
+
+	return nil
+}
+
+func seatbeltPolicy(cfg *config.Config) seatbelt.Policy {
 	// The filesystem is deny-by-default, as on Linux; only FS rules open it.
-	lines := []string{
-		"(version 1)",
-		"(allow default)",
-		"(deny file-read*)",
-		"(deny file-write*)",
-		"(deny file-map-executable)",
-		"(deny process-exec*)",
+	// Each allow that follows overrides these denials: it either comes later
+	// on the same operation or names a more exact one, such as
+	// file-read-data under file-read*.
+	policy := seatbelt.Policy{
+		seatbelt.Allow(seatbelt.Default, seatbelt.All),
+		seatbelt.Deny(seatbelt.FileRead, seatbelt.All),
+		seatbelt.Deny(seatbelt.FileWrite, seatbelt.All),
+		seatbelt.Deny(seatbelt.FileMapExecutable, seatbelt.All),
+		seatbelt.Deny(seatbelt.ProcessExec, seatbelt.All),
 		// dyld reads the root directory to locate its shared cache; without
 		// this, every exec aborts with SIGABRT before reaching main.
-		`(allow file-read-data (literal "/"))`,
+		seatbelt.Allow(seatbelt.FileReadData, seatbelt.Literal("/")),
 	}
 
 	for _, rule := range cfg.FSRules {
@@ -49,39 +60,35 @@ func seatbeltPolicy(cfg *config.Config) string {
 		// Seatbelt checks each symlink a command traverses, so reaching the
 		// rule through its original path needs each link's metadata readable.
 		for _, link := range links {
-			lines = append(lines, `(allow file-read-metadata (literal `+seatbeltQuote(link)+`))`)
+			policy = append(policy, seatbelt.Allow(seatbelt.FileReadMetadata, seatbelt.Literal(link)))
 		}
 
-		quotedPath := seatbeltQuote(path)
+		subtree := seatbelt.Subpath(path)
 
 		if rule.Rights&access.FS_READ != 0 {
-			lines = append(lines, `(allow file-read* (subpath `+quotedPath+`))`)
+			policy = append(policy, seatbelt.Allow(seatbelt.FileRead, subtree))
 		}
 
 		if rule.Rights&access.FS_WRITE != 0 {
-			lines = append(lines, `(allow file-write* (subpath `+quotedPath+`))`)
+			policy = append(policy, seatbelt.Allow(seatbelt.FileWrite, subtree))
 		}
 
 		// Like Landlock's execute right, exec rights let the rule's files run
 		// as programs; process-exec* also covers a script's interpreter.
 		if rule.Rights&access.FS_READ_EXEC == access.FS_READ_EXEC {
-			lines = append(lines,
-				`(allow file-map-executable (subpath `+quotedPath+`))`,
-				`(allow process-exec* (subpath `+quotedPath+`))`,
+			policy = append(policy,
+				seatbelt.Allow(seatbelt.FileMapExecutable, subtree),
+				seatbelt.Allow(seatbelt.ProcessExec, subtree),
 			)
 		}
 	}
 
-	allowInbound := false
-	allowOutbound := false
-	inboundPorts := make([]uint16, 0)
-	outboundPorts := make([]uint16, 0)
+	var inboundPorts, outboundPorts []uint16
 	seenInbound := make(map[uint16]struct{})
 	seenOutbound := make(map[uint16]struct{})
 
 	for _, rule := range cfg.NetRules {
 		if rule.Rights&access.NETWORK_BIND_TCP != 0 {
-			allowInbound = true
 			if _, ok := seenInbound[rule.Port]; !ok {
 				seenInbound[rule.Port] = struct{}{}
 				inboundPorts = append(inboundPorts, rule.Port)
@@ -89,7 +96,6 @@ func seatbeltPolicy(cfg *config.Config) string {
 		}
 
 		if rule.Rights&access.NETWORK_CONNECT_TCP != 0 {
-			allowOutbound = true
 			if _, ok := seenOutbound[rule.Port]; !ok {
 				seenOutbound[rule.Port] = struct{}{}
 				outboundPorts = append(outboundPorts, rule.Port)
@@ -97,29 +103,20 @@ func seatbeltPolicy(cfg *config.Config) string {
 		}
 	}
 
-	lines = append(lines, "(deny network-inbound)", "(deny network-outbound)")
+	policy = append(policy,
+		seatbelt.Deny(seatbelt.NetworkInbound, seatbelt.All),
+		seatbelt.Deny(seatbelt.NetworkOutbound, seatbelt.All),
+	)
 
-	if allowInbound {
-		for _, port := range inboundPorts {
-			lines = append(lines, `(allow network-inbound (local tcp "*:`+fmt.Sprintf("%d", port)+`"))`)
-		}
+	for _, port := range inboundPorts {
+		policy = append(policy, seatbelt.Allow(seatbelt.NetworkInbound, seatbelt.LocalTCP(port)))
 	}
 
-	if allowOutbound {
-		for _, port := range outboundPorts {
-			lines = append(lines, `(allow network-outbound (remote tcp "*:`+fmt.Sprintf("%d", port)+`"))`)
-		}
+	for _, port := range outboundPorts {
+		policy = append(policy, seatbelt.Allow(seatbelt.NetworkOutbound, seatbelt.RemoteTCP(port)))
 	}
 
-	return strings.Join(lines, "\n")
-}
-
-var seatbeltEscaper = strings.NewReplacer(`\`, `\\`, `"`, `\"`)
-
-// seatbeltQuote returns s as an SBPL string literal. Resolved paths include
-// symlink targets read from disk, so they must not be able to end the string.
-func seatbeltQuote(s string) string {
-	return `"` + seatbeltEscaper.Replace(s) + `"`
+	return policy
 }
 
 // maxSymlinkHops bounds symlink resolution, matching the kernel's MAXSYMLINKS.
