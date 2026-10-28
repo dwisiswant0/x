@@ -13,31 +13,11 @@ import (
 	"testing"
 
 	"go.dw1.io/x/exp/sandboxec/access"
+	"go.dw1.io/x/exp/sandboxec/internal/config"
 )
 
-func TestDarwinUnsupportedOptionErrors(t *testing.T) {
-	tests := []struct {
-		name string
-		opt  Option
-	}{
-		{name: "WithABI", opt: WithABI(1)},
-		{name: "WithIgnoreIfMissing", opt: WithIgnoreIfMissing()},
-		{name: "WithRestrictScoped", opt: WithRestrictScoped()},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := defaultConfig()
-			err := tt.opt(&cfg)
-			if !errors.Is(err, ErrInvalidOption) {
-				t.Fatalf("expected ErrInvalidOption, got %v", err)
-			}
-		})
-	}
-}
-
 func TestDarwinWithFSRuleValidationAndCleanPath(t *testing.T) {
-	cfg := defaultConfig()
+	var cfg config.Config
 
 	if err := WithFSRule("", access.FS_READ)(&cfg); !errors.Is(err, ErrInvalidOption) {
 		t.Fatalf("expected ErrInvalidOption for empty path, got %v", err)
@@ -47,22 +27,25 @@ func TestDarwinWithFSRuleValidationAndCleanPath(t *testing.T) {
 		t.Fatalf("expected ErrInvalidOption for zero rights, got %v", err)
 	}
 
-	inputPath := "/tmp/../tmp/."
+	// The first component does not exist, so symlink resolution leaves the
+	// path as it is and only cleaning can reduce it to /x.
+	inputPath := "/nonexistent-sandboxec/../x/."
 	if err := WithFSRule(inputPath, access.FS_READ_EXEC)(&cfg); err != nil {
 		t.Fatalf("WithFSRule valid input returned error: %v", err)
 	}
 
-	if len(cfg.fsRules) != 1 {
-		t.Fatalf("expected 1 fs rule, got %d", len(cfg.fsRules))
+	if len(cfg.FSRules) != 1 {
+		t.Fatalf("expected 1 fs rule, got %d", len(cfg.FSRules))
 	}
 
-	if cfg.fsRules[0].path != filepath.Clean(inputPath) {
-		t.Fatalf("fs rule path = %q, want %q", cfg.fsRules[0].path, filepath.Clean(inputPath))
+	policy := seatbeltPolicy(&cfg)
+	if want := `(allow file-read* (subpath "/x"))`; !strings.Contains(policy, want) {
+		t.Fatalf("policy missing %q for rule path %q:\n%s", want, inputPath, policy)
 	}
 }
 
 func TestDarwinWithNetworkRuleValidation(t *testing.T) {
-	cfg := defaultConfig()
+	var cfg config.Config
 
 	if err := WithNetworkRule(80, 0)(&cfg); !errors.Is(err, ErrInvalidOption) {
 		t.Fatalf("expected ErrInvalidOption for zero rights, got %v", err)
@@ -72,39 +55,28 @@ func TestDarwinWithNetworkRuleValidation(t *testing.T) {
 		t.Fatalf("WithNetworkRule valid input returned error: %v", err)
 	}
 
-	if len(cfg.netRules) != 1 || cfg.netRules[0].port != 443 || cfg.netRules[0].rights != access.NETWORK_CONNECT_TCP {
-		t.Fatalf("unexpected netRules contents: %+v", cfg.netRules)
+	if len(cfg.NetRules) != 1 || cfg.NetRules[0].Port != 443 || cfg.NetRules[0].Rights != access.NETWORK_CONNECT_TCP {
+		t.Fatalf("unexpected netRules contents: %+v", cfg.NetRules)
 	}
 }
 
-func TestDarwinWithUnsafeHostRuntimeDedupesAndNormalizes(t *testing.T) {
-	base := t.TempDir()
+// A truncated Mach-O file on PATH makes dependency resolution fail. The host
+// sandbox still works, so the error must not report it as unavailable.
+func TestDarwinWithUnsafeHostRuntimeResolveError(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "truncated"), []byte{0xcf, 0xfa, 0xed, 0xfe}, 0o755); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	t.Setenv("PATH", dir)
 
-	oldPATH := os.Getenv("PATH")
-	t.Cleanup(func() {
-		_ = os.Setenv("PATH", oldPATH)
-	})
-
-	dupPath := base + "/"
-	if err := os.Setenv("PATH", dupPath+":"+base); err != nil {
-		t.Fatalf("failed to set PATH: %v", err)
+	var cfg config.Config
+	err := WithUnsafeHostRuntime()(&cfg)
+	if !errors.Is(err, ErrInvalidOption) {
+		t.Fatalf("expected ErrInvalidOption, got %v", err)
 	}
 
-	cfg := defaultConfig()
-	if err := WithUnsafeHostRuntime()(&cfg); err != nil {
-		t.Fatalf("WithUnsafeHostRuntime returned error: %v", err)
-	}
-
-	if len(cfg.fsRules) != 1 {
-		t.Fatalf("expected one deduped fs rule, got %d: %+v", len(cfg.fsRules), cfg.fsRules)
-	}
-
-	if cfg.fsRules[0].path != filepath.Clean(base) {
-		t.Fatalf("deduped path = %q, want %q", cfg.fsRules[0].path, filepath.Clean(base))
-	}
-
-	if cfg.fsRules[0].rights != access.FS_READ_EXEC {
-		t.Fatalf("fs rule rights = %v, want FS_READ_EXEC", cfg.fsRules[0].rights)
+	if errors.Is(err, ErrUnavailable) {
+		t.Fatalf("expected no match for ErrUnavailable, got %v", err)
 	}
 }
 
@@ -140,7 +112,7 @@ func TestDarwinResolveSeatbeltPath(t *testing.T) {
 }
 
 func TestDarwinSeatbeltPolicyFromRules(t *testing.T) {
-	cfg := defaultConfig()
+	var cfg config.Config
 
 	if err := WithFSRule("/tmp", access.FS_READ_EXEC)(&cfg); err != nil {
 		t.Fatalf("WithFSRule returned error: %v", err)
@@ -150,7 +122,7 @@ func TestDarwinSeatbeltPolicyFromRules(t *testing.T) {
 		t.Fatalf("WithNetworkRule returned error: %v", err)
 	}
 
-	policy := cfg.seatbeltPolicy()
+	policy := seatbeltPolicy(&cfg)
 
 	checks := []string{
 		"(deny file-read*)",

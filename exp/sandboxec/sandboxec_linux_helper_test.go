@@ -37,7 +37,7 @@ func TestHelperProcess(t *testing.T) {
 	case "net-only":
 		err = helperNoFSRulesDeniesFS(WithNetworkRule(443, access.NETWORK_CONNECT_TCP))
 	case "scoped-only":
-		err = helperNoFSRulesDeniesFS(WithRestrictScoped())
+		err = helperNoFSRulesDeniesFS(withRestrictScoped())
 	case "parity-output":
 		err = helperParityOutput()
 	case "parity-pipes":
@@ -228,7 +228,7 @@ func helperBestEffort() error {
 func helperIgnoreMissing() error {
 	sb := newSandboxWithBaseExec(
 		WithBestEffort(),
-		WithIgnoreIfMissing(),
+		withIgnoreIfMissing(),
 		WithFSRule("/does/not/exist", access.FS_READ_EXEC),
 		WithFSRule("/bin", access.FS_READ_EXEC),
 	)
@@ -302,7 +302,7 @@ func helperUnsafeHostRuntimeWith() error {
 	targetDir := filepath.Dir(target)
 
 	withHostRuntime := New(
-		WithIgnoreIfMissing(),
+		withIgnoreIfMissing(),
 		WithFSRule(target, access.FS_READ_EXEC),
 		WithFSRule(targetDir, access.FS_READ_EXEC),
 		WithFSRule("/dev/null", access.FS_READ_WRITE),
@@ -394,7 +394,7 @@ func helperNetRestrict() error {
 	}
 
 	sb := newSandboxWithBaseExec(
-		WithABI(6),
+		withABI(6),
 		WithNetworkRule(uint16(allowedPort), access.NETWORK_BIND_TCP|access.NETWORK_CONNECT_TCP),
 		WithFSRule(testBin, access.FS_READ_EXEC),
 		WithFSRule(filepath.Dir(testBin), access.FS_READ_EXEC),
@@ -626,7 +626,7 @@ func helperCurlAllowed() error {
 
 	url := fmt.Sprintf("http://127.0.0.1:%d/", allowedPort)
 	options := []Option{
-		WithABI(6),
+		withABI(6),
 		WithFSRule("/etc", access.FS_READ),
 		WithNetworkRule(uint16(allowedPort), access.NETWORK_CONNECT_TCP),
 	}
@@ -678,7 +678,7 @@ func helperCurlDenied() error {
 
 	url := fmt.Sprintf("http://127.0.0.1:%d/", allowedPort)
 	options := []Option{
-		WithABI(6),
+		withABI(6),
 		WithFSRule("/etc", access.FS_READ),
 		WithNetworkRule(uint16(blockedPort), access.NETWORK_CONNECT_TCP),
 	}
@@ -734,7 +734,7 @@ func helperCurlNoNetworkRulesDenied() error {
 	}()
 
 	options := []Option{
-		WithABI(6),
+		withABI(6),
 		WithFSRule("/etc", access.FS_READ),
 	}
 	options = append(options, curlAccessOptions(curlPath)...)

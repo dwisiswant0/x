@@ -1,6 +1,6 @@
 // nolint
-//go:build darwin
-// +build darwin
+//go:build linux || darwin
+// +build linux darwin
 
 package sandboxec
 
@@ -8,15 +8,18 @@ import (
 	"context"
 	"os/exec"
 	"sync"
+
+	"go.dw1.io/x/exp/sandboxec/internal/config"
 )
 
-// Sandboxec configures Seatbelt restrictions for the current process and
-// produces Cmd values that run under those restrictions.
+// Sandboxec configures sandbox restrictions for the current process and
+// produces Cmd values that run under those restrictions. It uses Landlock on
+// Linux and Seatbelt on Darwin.
 //
-// Seatbelt restrictions apply to the current process and all goroutines. Once
+// The restrictions apply to the current process and all goroutines. Once
 // enforced, they cannot be removed for the lifetime of the process.
 type Sandboxec struct {
-	cfg       config
+	cfg       config.Config
 	optErr    error
 	applyOnce sync.Once
 	applyErr  error
@@ -30,9 +33,9 @@ type Cmd = exec.Cmd
 // Option errors are recorded and surfaced on the first call to Command or
 // CommandContext via the returned Cmd Err field.
 func New(opts ...Option) *Sandboxec {
+	var cfg config.Config
 	var optErr error
 
-	cfg := defaultConfig()
 	for _, opt := range opts {
 		if opt == nil {
 			continue
@@ -49,32 +52,28 @@ func New(opts ...Option) *Sandboxec {
 	}
 }
 
-// Command returns a Cmd configured like [exec.Command], after enforcing
-// Seatbelt for the current process.
+// Command returns a Cmd configured like [exec.Command], after enforcing the
+// sandbox for the current process.
 //
 // If enforcement fails, the returned Cmd has Err set to that failure.
 func (s *Sandboxec) Command(name string, arg ...string) *Cmd {
 	s.enforceOnce()
 
 	cmd := exec.Command(name, arg...)
-	if s.applyErr != nil {
-		cmd.Err = s.applyErr
-	}
+	s.attach(cmd)
 
 	return cmd
 }
 
 // CommandContext returns a Cmd configured like [exec.CommandContext], after
-// enforcing Seatbelt for the current process.
+// enforcing the sandbox for the current process.
 //
 // If enforcement fails, the returned Cmd has Err set to that failure.
 func (s *Sandboxec) CommandContext(ctx context.Context, name string, arg ...string) *Cmd {
 	s.enforceOnce()
 
 	cmd := exec.CommandContext(ctx, name, arg...)
-	if s.applyErr != nil {
-		cmd.Err = s.applyErr
-	}
+	s.attach(cmd)
 
 	return cmd
 }
@@ -84,26 +83,23 @@ func LookPath(file string) (string, error) {
 	return exec.LookPath(file)
 }
 
+// enforceOnce runs before each command is created, so that the command's PATH
+// lookup sees the same restrictions on every call, including the first.
 func (s *Sandboxec) enforceOnce() {
 	s.applyOnce.Do(func() {
+		if s.optErr != nil {
+			s.applyErr = s.optErr
+
+			return
+		}
+
 		s.applyErr = s.enforce()
 	})
 }
 
-func (s *Sandboxec) enforce() error {
-	if s.optErr != nil {
-		return s.optErr
+// attach applies the enforcement result to a newly created command.
+func (s *Sandboxec) attach(cmd *Cmd) {
+	if s.applyErr != nil {
+		cmd.Err = s.applyErr
 	}
-
-	policy := s.cfg.seatbeltPolicy()
-
-	if err := applySeatbelt(policy, s.cfg.flags); err != nil {
-		if s.cfg.bestEffort {
-			return nil
-		}
-
-		return err
-	}
-
-	return nil
 }
