@@ -287,7 +287,8 @@ func GetInterp(file string) (string, error) {
 // A path or link target that does not exist ends that chain without error, so
 // a stale library entry does not abort the whole batch. So does a chain that
 // loops or has more links than the kernel follows. The links of such a chain
-// are dropped too, since the path they were followed from cannot be opened.
+// are dropped too, since the path they were followed from cannot be opened,
+// and so is any link that does not open to the file that path opens to.
 func follow(paths ...string) ([]string, error) {
 	seen := make(map[string]struct{})
 
@@ -317,12 +318,20 @@ func followInternal(path string, seen map[string]struct{}) error {
 		}
 		return nil
 	}
-	// keep checks that start opens before keeping its chain. The kernel also
-	// counts symlinks in directory components, and in the part of the chain
-	// that an earlier path already followed, which this walk does not see.
+	// keep keeps the paths of the chain that open to the file start opens to.
+	// The kernel also counts symlinks in directory components, and in the part
+	// of the chain that an earlier path already followed, and it applies ".."
+	// in a link's target to the link's resolved directory. This walk sees none
+	// of that.
 	keep := func() error {
-		if _, err := os.Stat(start); err != nil {
+		target, err := os.Stat(start)
+		if err != nil {
 			return drop()
+		}
+		for _, link := range added {
+			if info, err := os.Stat(link); err != nil || !os.SameFile(info, target) {
+				delete(seen, link)
+			}
 		}
 		return nil
 	}
@@ -372,6 +381,7 @@ func followInternal(path string, seen map[string]struct{}) error {
 //
 // If a file has no dependencies, that is not an error. Per-file failures are
 // skipped so one problematic file does not abort processing the whole batch.
+// A path is returned only if it is a library, whatever the loader reports.
 //
 // It's not an error for a file to not be an ELF.
 func List(names ...string) ([]string, error) {
@@ -449,14 +459,50 @@ func List(names ...string) ([]string, error) {
 
 	libs := make([]string, 0, len(list)+len(interps))
 
+	// The interpreter and the loader's report come from the files being
+	// inspected: the loader prints the names and search paths they store as
+	// they are, so a line can name any path. Keep only the paths that are
+	// libraries.
+	//
 	// People expect to see the interps first.
 	for s := range interps {
-		libs = append(libs, s)
+		if isLibrary(s) {
+			libs = append(libs, s)
+		}
 	}
 	for s := range list {
-		libs = append(libs, s)
+		if isLibrary(s) {
+			libs = append(libs, s)
+		}
 	}
 	return libs, nil
+}
+
+// isLibrary reports whether path opens as a file the loader would map as a
+// library: an ELF shared object that is not a position-independent executable.
+func isLibrary(path string) bool {
+	f, err := elf.Open(path)
+	if err != nil {
+		return false
+	}
+	defer func() {
+		_ = f.Close()
+	}()
+
+	if f.Type != elf.ET_DYN {
+		return false
+	}
+	flags, err := f.DynValue(elf.DT_FLAGS_1)
+	if err != nil {
+		return false
+	}
+	for _, flag := range flags {
+		if elf.DynFlag1(flag)&elf.DF_1_PIE != 0 {
+			return false
+		}
+	}
+
+	return true
 }
 
 // FList returns a list of all library dependencies for a set of files,

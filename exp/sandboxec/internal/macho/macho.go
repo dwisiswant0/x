@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -33,6 +34,12 @@ type depCacheEntry struct {
 	Deps []string
 }
 
+// GetDependencies returns the dylibs that root depends on, directly or through
+// other dylibs.
+//
+// A file names its dylibs by path, so the file at such a path can be any file,
+// and it can change after a walk was cached. Only the paths that are dylibs
+// when GetDependencies returns are kept.
 func GetDependencies(root string) ([]string, error) {
 	if root == "" {
 		return nil, nil
@@ -41,7 +48,7 @@ func GetDependencies(root string) ([]string, error) {
 	cache := getDepCache()
 	if key, ok := depCacheKey(root); ok {
 		if cached, found := cache.Get(key); found {
-			return append([]string(nil), cached.Deps...), nil
+			return dylibs(cached.Deps), nil
 		}
 
 		deps, complete := getDeps(root)
@@ -50,12 +57,24 @@ func GetDependencies(root string) ([]string, error) {
 			maybeSaveDepCache()
 		}
 
-		return append([]string(nil), deps...), nil
+		return dylibs(deps), nil
 	}
 
 	deps, _ := getDeps(root)
 
-	return deps, nil
+	return dylibs(deps), nil
+}
+
+// dylibs returns, in a new slice, the paths that are dylibs.
+func dylibs(paths []string) []string {
+	kept := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if isDylib(path) {
+			kept = append(kept, path)
+		}
+	}
+
+	return kept
 }
 
 // getDeps returns the dependencies of root and, recursively, of each dylib,
@@ -136,6 +155,82 @@ func notMachO(path string) bool {
 	}
 
 	return true
+}
+
+// magicFat64 starts a universal binary whose entries hold 64-bit offsets,
+// which debug/macho does not read.
+const magicFat64 = 0xcafebabf
+
+// isDylib reports whether the file at path is a dylib, or a universal binary
+// with a dylib image. It reads only the headers: debug/macho also reads the
+// symbol table, which makes checking every dependency many times slower.
+func isDylib(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer func() {
+		_ = f.Close()
+	}()
+
+	var header [8]byte
+	if _, err := f.ReadAt(header[:], 0); err != nil {
+		return false
+	}
+
+	// An entry of a universal binary is big-endian and holds the offset of its
+	// image after two words: a 32-bit one in fat_arch, a 64-bit one in
+	// fat_arch_64.
+	var entrySize int
+	switch binary.BigEndian.Uint32(header[:4]) {
+	case macho.MagicFat:
+		entrySize = 20
+	case magicFat64:
+		entrySize = 32
+	default:
+		return imageIsDylib(f, 0)
+	}
+
+	// Like dyld, accept only entries that fit in the first page.
+	count := int(binary.BigEndian.Uint32(header[4:]))
+	if count == 0 || count > (4096-len(header))/entrySize {
+		return false
+	}
+	entries := make([]byte, count*entrySize)
+	if _, err := f.ReadAt(entries, int64(len(header))); err != nil {
+		return false
+	}
+	for entry := range slices.Chunk(entries, entrySize) {
+		offset := int64(binary.BigEndian.Uint32(entry[8:12]))
+		if entrySize == 32 {
+			offset = int64(binary.BigEndian.Uint64(entry[8:16]))
+		}
+		if imageIsDylib(f, offset) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// imageIsDylib reports whether the Mach-O image at offset in r is a dylib.
+func imageIsDylib(r io.ReaderAt, offset int64) bool {
+	var header [16]byte
+	if _, err := r.ReadAt(header[:], offset); err != nil {
+		return false
+	}
+
+	var order binary.ByteOrder
+	switch binary.LittleEndian.Uint32(header[:4]) {
+	case macho.Magic32, macho.Magic64:
+		order = binary.LittleEndian
+	case 0xcefaedfe, 0xcffaedfe:
+		order = binary.BigEndian
+	default:
+		return false
+	}
+
+	return macho.Type(order.Uint32(header[12:16])) == macho.TypeDylib
 }
 
 // hostCPU returns the CPU of the images a native process loads, or 0 when

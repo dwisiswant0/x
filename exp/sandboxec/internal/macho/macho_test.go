@@ -6,8 +6,11 @@ package macho
 
 import (
 	"debug/macho"
+	"encoding/binary"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -233,4 +236,178 @@ func TestGetDepsComplete(t *testing.T) {
 	if _, complete := getDeps(unreadable); complete {
 		t.Error("getDeps(unreadable) is complete, want incomplete")
 	}
+}
+
+// A file names its dylibs by path, so the file a path names may be any file,
+// and it may change after its walk was cached.
+func TestGetDependenciesSkipsFilesThatAreNotDylibs(t *testing.T) {
+	cc, err := exec.LookPath("cc")
+	if err != nil {
+		t.Skipf("no C compiler: %v", err)
+	}
+
+	dir := t.TempDir()
+	lib := filepath.Join(dir, "libdep.dylib")
+	main := filepath.Join(dir, "main")
+	for name, src := range map[string]string{
+		"dep.c":  "int dep(void) { return 1; }\n",
+		"main.c": "int dep(void);\nint main(void) { return dep(); }\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o644); err != nil {
+			t.Fatalf("WriteFile returned error: %v", err)
+		}
+	}
+	for _, args := range [][]string{
+		{"-dynamiclib", "-install_name", lib, "-o", lib, filepath.Join(dir, "dep.c")},
+		{"-o", main, filepath.Join(dir, "main.c"), lib},
+	} {
+		if out, err := exec.Command(cc, args...).CombinedOutput(); err != nil {
+			t.Skipf("cc %q failed: %v\n%s", args, err, out)
+		}
+	}
+
+	key, ok := depCacheKey(main)
+	if !ok {
+		t.Fatalf("depCacheKey(%q) returned no key", main)
+	}
+	cache := getDepCache()
+	t.Cleanup(func() { cache.Delete(key) })
+
+	dylib, err := os.ReadFile(lib)
+	if err != nil {
+		t.Fatalf("ReadFile returned error: %v", err)
+	}
+	executable, err := os.ReadFile(main)
+	if err != nil {
+		t.Fatalf("ReadFile returned error: %v", err)
+	}
+	for _, tt := range []struct {
+		name    string
+		content []byte
+	}{
+		{name: "text", content: []byte("not a library\n")},
+		{name: "executable", content: executable},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := os.WriteFile(lib, dylib, 0o755); err != nil {
+				t.Fatalf("WriteFile returned error: %v", err)
+			}
+			deps, err := GetDependencies(main)
+			if err != nil {
+				t.Fatalf("GetDependencies returned error: %v", err)
+			}
+			if !slices.Contains(deps, lib) {
+				t.Fatalf("GetDependencies(%q) = %q, missing dylib %q", main, deps, lib)
+			}
+			if !cache.Has(key) {
+				t.Fatalf("GetDependencies(%q) did not cache its walk", main)
+			}
+
+			if err := os.WriteFile(lib, tt.content, 0o755); err != nil {
+				t.Fatalf("WriteFile returned error: %v", err)
+			}
+
+			// The first call is served from the cache, the second walks again.
+			for _, walk := range []string{"cached", "fresh"} {
+				deps, err := GetDependencies(main)
+				if err != nil {
+					t.Fatalf("GetDependencies returned error: %v", err)
+				}
+				if slices.Contains(deps, lib) {
+					t.Errorf("%s GetDependencies(%q) = %q, includes %q, which is not a dylib", walk, main, deps, lib)
+				}
+				cache.Delete(key)
+			}
+		})
+	}
+}
+
+func TestIsDylib(t *testing.T) {
+	cc, err := exec.LookPath("cc")
+	if err != nil {
+		t.Skipf("no C compiler: %v", err)
+	}
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "main.c")
+	if err := os.WriteFile(src, []byte("int main(void) { return 0; }\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	build := func(name string, args ...string) []byte {
+		t.Helper()
+
+		file := filepath.Join(dir, name)
+		args = append(args, "-o", file, src)
+		if out, err := exec.Command(cc, args...).CombinedOutput(); err != nil {
+			t.Skipf("cc %q failed: %v\n%s", args, err, out)
+		}
+		data, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatalf("ReadFile returned error: %v", err)
+		}
+
+		return data
+	}
+	universal := []string{"-arch", "arm64", "-arch", "x86_64"}
+	dylib := build("dylib", "-dynamiclib")
+	executable := build("executable")
+
+	oversized := fat(false, dylib)
+	binary.BigEndian.PutUint32(oversized[4:], (4096-8)/20+1)
+
+	tests := []struct {
+		name string
+		data []byte
+		want bool
+	}{
+		{name: "dylib", data: dylib, want: true},
+		{name: "universal dylib", data: build("universal dylib", append([]string{"-dynamiclib"}, universal...)...), want: true},
+		{name: "64-bit universal dylib", data: fat(true, dylib), want: true},
+		{name: "universal with a dylib image", data: fat(false, executable, dylib), want: true},
+		{name: "executable", data: executable},
+		{name: "universal executable", data: build("universal executable", universal...)},
+		{name: "universal with more entries than dyld reads", data: oversized},
+		{name: "text", data: []byte("not a library\n")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			file := filepath.Join(dir, "check")
+			if err := os.WriteFile(file, tt.data, 0o644); err != nil {
+				t.Fatalf("WriteFile returned error: %v", err)
+			}
+
+			if got := isDylib(file); got != tt.want {
+				t.Errorf("isDylib(%s) = %v, want %v", tt.name, got, tt.want)
+			}
+		})
+	}
+}
+
+// fat returns a universal binary of images, each at a page boundary, with
+// fat_arch entries, or fat_arch_64 ones if wide.
+func fat(wide bool, images ...[]byte) []byte {
+	magic, entrySize := uint32(macho.MagicFat), 20
+	if wide {
+		magic, entrySize = magicFat64, 32
+	}
+
+	out := binary.BigEndian.AppendUint32(nil, magic)
+	out = binary.BigEndian.AppendUint32(out, uint32(len(images)))
+	offset := 4096
+	for _, image := range images {
+		entry := make([]byte, entrySize)
+		if wide {
+			binary.BigEndian.PutUint64(entry[8:], uint64(offset))
+		} else {
+			binary.BigEndian.PutUint32(entry[8:], uint32(offset))
+		}
+		out = append(out, entry...)
+		offset += (len(image) + 4095) / 4096 * 4096
+	}
+	for _, image := range images {
+		out = append(out, make([]byte, (4096-len(out)%4096)%4096)...)
+		out = append(out, image...)
+	}
+
+	return out
 }

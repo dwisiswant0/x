@@ -187,6 +187,47 @@ func TestFollowDropsUnopenableChains(t *testing.T) {
 	}
 }
 
+// The kernel applies ".." in a link's target to the directory the link is in
+// after resolving it, so a walk that joins the two as written can reach a
+// different file.
+func TestFollowKeepsOnlyPathsToTheSameFile(t *testing.T) {
+	dir := t.TempDir()
+
+	// dir/w/a -> dir/w/x/y, and dir/w/x/y/libq.so -> ../../lib/libq.so, which
+	// the kernel opens as dir/w/lib/libq.so. Joined as written, it is
+	// dir/lib/libq.so.
+	w := filepath.Join(dir, "w")
+	for _, d := range []string{filepath.Join(w, "x", "y"), filepath.Join(w, "lib"), filepath.Join(dir, "lib")} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("MkdirAll returned error: %v", err)
+		}
+	}
+	library, other := filepath.Join(w, "lib", "libq.so"), filepath.Join(dir, "lib", "libq.so")
+	for _, file := range []string{library, other} {
+		if err := os.WriteFile(file, []byte(file), 0o644); err != nil {
+			t.Fatalf("WriteFile returned error: %v", err)
+		}
+	}
+	if err := os.Symlink(filepath.Join(w, "x", "y"), filepath.Join(w, "a")); err != nil {
+		t.Fatalf("Symlink returned error: %v", err)
+	}
+	if err := os.Symlink("../../lib/libq.so", filepath.Join(w, "x", "y", "libq.so")); err != nil {
+		t.Fatalf("Symlink returned error: %v", err)
+	}
+
+	start := filepath.Join(w, "a", "libq.so")
+	got, err := follow(start)
+	if err != nil {
+		t.Fatalf("follow returned error: %v", err)
+	}
+	if slices.Contains(got, other) {
+		t.Errorf("follow(%q) = %q, includes %q, which it does not open", start, got, other)
+	}
+	if !slices.Contains(got, start) {
+		t.Errorf("follow(%q) = %q, missing %q", start, got, start)
+	}
+}
+
 // A cached dependency list is stale once the loader's cache or environment
 // changes, as after a library moves and ldconfig runs.
 func TestDepCacheKeyTracksLoaderState(t *testing.T) {
@@ -277,5 +318,51 @@ func TestListRefreshesEntryWithMissingLibrary(t *testing.T) {
 	}
 	if len(got) == 0 {
 		t.Fatalf("List(%q) returned no libraries", exe)
+	}
+}
+
+func TestListSkipsFilesThatAreNotLibraries(t *testing.T) {
+	exe := pickDynamicExecutable(t)
+
+	interp, err := GetInterp(exe)
+	if err != nil {
+		t.Fatalf("GetInterp returned error: %v", err)
+	}
+	libs, err := runinterp(interp, exe)
+	if err != nil || len(libs) == 0 {
+		t.Fatalf("runinterp(%q, %q) = %q, %v, want libraries", interp, exe, libs, err)
+	}
+	key, ok := depCacheKey(exe)
+	if !ok {
+		t.Fatalf("depCacheKey(%q) returned no key", exe)
+	}
+
+	// The loader's report names whatever the inspected files ask for, so
+	// stand in for a report that names a file, a directory and a program,
+	// none of which is a library. A program is commonly a position-independent
+	// executable, which is an ELF shared object too.
+	dir := t.TempDir()
+	notLibraries := []string{filepath.Join(dir, "libnotes.so.1"), filepath.Join(dir, "libdir.so.1"), exe}
+	if err := os.WriteFile(notLibraries[0], []byte("not a library\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	if err := os.Mkdir(notLibraries[1], 0o755); err != nil {
+		t.Fatalf("Mkdir returned error: %v", err)
+	}
+	cache := getDepCache()
+	cache.Set(key, depCacheEntry{Interp: interp, SONames: append([]string{libs[0]}, notLibraries...)})
+	t.Cleanup(func() { cache.Delete(key) })
+
+	got, err := List(exe)
+	if err != nil {
+		t.Fatalf("List returned error: %v", err)
+	}
+	for _, path := range notLibraries {
+		if slices.Contains(got, path) {
+			t.Errorf("List(%q) = %q, includes %q, which is not a library", exe, got, path)
+		}
+	}
+	if !slices.Contains(got, libs[0]) {
+		t.Errorf("List(%q) = %q, missing library %q", exe, got, libs[0])
 	}
 }
