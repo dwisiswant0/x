@@ -168,6 +168,46 @@ func TestDarwinSeatbeltPolicyAllowsFollowDenials(t *testing.T) {
 	}
 }
 
+// os/exec opens /dev/null in the sandboxed process for nil standard streams,
+// so every policy allows its data and metadata, and nothing else.
+func TestDarwinSeatbeltPolicyAllowsDevNull(t *testing.T) {
+	var cfg config.Config
+	cfg.FSRules = append(cfg.FSRules, config.FSRule{Path: "/usr", Rights: access.FS_READ_EXEC})
+
+	for name, policy := range map[string]seatbelt.Policy{
+		"no rules":   seatbeltPolicy(&config.Config{}),
+		"with rules": seatbeltPolicy(&cfg),
+	} {
+		for _, op := range []seatbelt.Operation{seatbelt.FileReadData, seatbelt.FileReadMetadata, seatbelt.FileWriteData} {
+			if !slices.Contains(policy, seatbelt.Allow(op, seatbelt.Literal("/dev/null"))) {
+				t.Errorf("%s: policy must allow %s on /dev/null; policy:\n%s", name, op, policy)
+			}
+		}
+
+		// file-write* would also allow removing or replacing /dev/null.
+		for _, op := range []seatbelt.Operation{seatbelt.FileRead, seatbelt.FileWrite} {
+			if slices.Contains(policy, seatbelt.Allow(op, seatbelt.Literal("/dev/null"))) {
+				t.Errorf("%s: policy must not allow %s on /dev/null; policy:\n%s", name, op, policy)
+			}
+		}
+
+		for _, rule := range policy {
+			if strings.Contains(rule.String(), `"/dev/`) && !strings.Contains(rule.String(), `"/dev/null"`) {
+				t.Errorf("%s: policy must allow nothing else under /dev, got %s", name, rule)
+			}
+		}
+	}
+}
+
+func TestDarwinSeatbeltPolicyIsDeterministic(t *testing.T) {
+	var cfg config.Config
+	cfg.FSRules = append(cfg.FSRules, config.FSRule{Path: "/usr", Rights: access.FS_READ_EXEC})
+
+	if first, second := seatbeltPolicy(&cfg).String(), seatbeltPolicy(&cfg).String(); first != second {
+		t.Fatalf("identical rules must produce identical policies, got:\n%s\nand:\n%s", first, second)
+	}
+}
+
 func TestDarwinSeatbeltProbeReportsPolicyError(t *testing.T) {
 	runHelperDarwin(t, "seatbelt-probe", nil)
 }
@@ -203,6 +243,14 @@ func TestDarwinNoFSRulesDeniesFS(t *testing.T) {
 			runHelperDarwin(t, scenario, map[string]string{"SANDBOXEC_FILE": outsideFile(t)})
 		})
 	}
+}
+
+func TestDarwinDevNullWithoutRule(t *testing.T) {
+	runHelperDarwin(t, "dev-null", map[string]string{"SANDBOXEC_FILE": outsideFile(t)})
+}
+
+func TestDarwinDevNullRuleIsExact(t *testing.T) {
+	runHelperDarwin(t, "dev-null-exact", nil)
 }
 
 func TestDarwinReadRuleDeniesExec(t *testing.T) {

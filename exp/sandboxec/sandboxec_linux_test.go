@@ -6,8 +6,10 @@ package sandboxec
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -59,6 +61,25 @@ func TestNetworkRulesRequireV4(t *testing.T) {
 	cmd := sb.Command("/bin/true")
 	if cmd.Err == nil || !errors.Is(cmd.Err, ErrABINotSupported) {
 		t.Fatalf("expected ErrABINotSupported, got %v", cmd.Err)
+	}
+}
+
+// os/exec opens /dev/null in the sandboxed process for nil standard streams.
+func TestDevNullWithoutRule(t *testing.T) {
+	runHelper(t, "dev-null", nil)
+}
+
+func TestDevNullRuleIsExact(t *testing.T) {
+	runHelper(t, "dev-null-exact", nil)
+}
+
+// The rule asks only for rights that the selected ABI handles, which can be
+// fewer than the kernel's.
+func TestDevNullAtOlderABIs(t *testing.T) {
+	for _, abi := range []int{1, 2, 3, 4} {
+		t.Run(fmt.Sprintf("abi%d", abi), func(t *testing.T) {
+			runHelper(t, "dev-null-abi", map[string]string{"SANDBOXEC_ABI": strconv.Itoa(abi)})
+		})
 	}
 }
 

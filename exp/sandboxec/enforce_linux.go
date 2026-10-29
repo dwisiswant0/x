@@ -122,7 +122,7 @@ func (s *Sandboxec) enforce() error {
 	hasNetRules := len(s.cfg.NetRules) > 0
 
 	if !hasFSRules && !hasNetRules && !s.cfg.RestrictScoped {
-		if err := cfg.Restrict(); err != nil {
+		if err := cfg.Restrict(devNullRule(abi)); err != nil {
 			return fmt.Errorf("landlock default restrict failed: %w", err)
 		}
 
@@ -130,11 +130,14 @@ func (s *Sandboxec) enforce() error {
 	}
 
 	// The filesystem is deny-by-default: without FS rules, deny all of it,
-	// even when only network or scoped restrictions are set.
+	// even when only network or scoped restrictions are set. The one
+	// exception is /dev/null, which every sandbox allows.
 	rules, err := s.buildFSRules()
 	if err != nil {
 		return err
 	}
+
+	rules = append(rules, devNullRule(abi))
 
 	if err := cfg.RestrictPaths(rules...); err != nil {
 		return fmt.Errorf("landlock restrict paths failed: %w", err)
@@ -169,6 +172,31 @@ func (s *Sandboxec) enforce() error {
 	}
 
 	return nil
+}
+
+// devNullRule returns the rule that lets every sandbox use /dev/null, which
+// os/exec opens in the sandboxed process for a nil standard stream. Only
+// /dev/null is allowed: /dev/stdin, /dev/stdout and /dev/stderr link to
+// /proc/self/fd/N, so a rule for them would grant whatever file the process's
+// standard streams point at.
+//
+// It grants what a read-write file rule would, limited to the rights that abi
+// handles. go-landlock checks a rule's rights against the handled set before
+// any best-effort downgrade, so a right that abi does not handle, such as
+// ioctl_dev below ABI 5, would make enforcement fail.
+func devNullRule(abi int) landlock.Rule {
+	rights := landlock.AccessFSSet(syscall.AccessFSReadFile | syscall.AccessFSWriteFile)
+
+	if abi >= 3 {
+		rights |= landlock.AccessFSSet(syscall.AccessFSTruncate)
+	}
+
+	if abi >= 5 {
+		rights |= landlock.AccessFSSet(syscall.AccessFSIoctlDev)
+	}
+
+	// A system without /dev/null, such as a minimal container, still enforces.
+	return landlock.PathAccess(rights, "/dev/null").IgnoreIfMissing()
 }
 
 func (s *Sandboxec) buildFSRules() ([]landlock.Rule, error) {

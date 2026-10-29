@@ -10,8 +10,8 @@ import (
 )
 
 // isExecDenied reports whether err comes from the sandbox refusing to start a
-// program, rather than from another permission failure such as opening
-// /dev/null for the command's standard streams.
+// program, rather than from another permission failure such as opening a
+// file for the command's standard streams.
 func isExecDenied(err error) bool {
 	var pathErr *os.PathError
 

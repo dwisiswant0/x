@@ -76,6 +76,12 @@ func TestHelperProcess(t *testing.T) {
 		err = helperCurlDenied()
 	case "curl-no-net-rules-denied":
 		err = helperCurlNoNetworkRulesDenied()
+	case "dev-null":
+		err = helperDevNull()
+	case "dev-null-exact":
+		err = helperDevNullExact()
+	case "dev-null-abi":
+		err = helperDevNullABI()
 	default:
 		fmt.Fprintf(os.Stderr, "unknown scenario: %s\n", scenario)
 		os.Exit(2)
@@ -104,8 +110,8 @@ func helperNoFSRulesDeniesFS(opts ...Option) error {
 		return fmt.Errorf("enforce failed: %w", cmd.Err)
 	}
 
-	// Pass stdin through so the sandboxed parent never has to open /dev/null.
-	cmd.Stdin = os.Stdin
+	// The nil stdin makes os/exec open /dev/null, which the sandbox allows, so
+	// the failure comes from the exec itself.
 	if out, err := cmd.CombinedOutput(); !isExecDenied(err) {
 		return fmt.Errorf("expected exec without fs rules to be denied, got %v: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -274,7 +280,6 @@ func helperUnsafeHostRuntimeWithout() error {
 	withoutHostRuntime := New(
 		WithFSRule(target, access.FS_READ_EXEC),
 		WithFSRule(targetDir, access.FS_READ_EXEC),
-		WithFSRule("/dev/null", access.FS_READ_WRITE),
 	)
 
 	withoutCmd := withoutHostRuntime.Command(target, "sandboxec")
@@ -305,7 +310,6 @@ func helperUnsafeHostRuntimeWith() error {
 		withIgnoreIfMissing(),
 		WithFSRule(target, access.FS_READ_EXEC),
 		WithFSRule(targetDir, access.FS_READ_EXEC),
-		WithFSRule("/dev/null", access.FS_READ_WRITE),
 		WithUnsafeHostRuntime(),
 	)
 
@@ -765,6 +769,75 @@ func helperCurlNoNetworkRulesDenied() error {
 	return fmt.Errorf("unexpected curl denial mode: %v: %s", err, strings.TrimSpace(string(output)))
 }
 
+// helperDevNull checks that a sandbox without a /dev/null rule still lets
+// os/exec open /dev/null for the command's nil standard streams.
+func helperDevNull(opts ...Option) error {
+	sb := newSandboxWithBaseExec(append(opts, withIgnoreIfMissing())...)
+
+	// A nil stdin makes os/exec open /dev/null for reading.
+	cmd := sb.Command("/bin/echo", "hello")
+	if cmd.Err != nil {
+		if isLandlockSkip(cmd.Err) {
+			return fmt.Errorf("SKIP: landlock unavailable: %v", cmd.Err)
+		}
+		return fmt.Errorf("enforce failed: %w", cmd.Err)
+	}
+	if out, err := cmd.Output(); err != nil || string(out) != "hello\n" {
+		return fmt.Errorf("expected output with nil stdin, got %v: %q", err, out)
+	}
+
+	// Nil stdout and stderr make it open /dev/null for writing.
+	if err := sb.Command("/bin/echo", "hello").Run(); err != nil {
+		return fmt.Errorf("expected run with nil streams, got %w", err)
+	}
+
+	// The sandbox also applies to this process, so it cannot read files.
+	if _, err := os.ReadFile("/etc/hosts"); !errors.Is(err, os.ErrPermission) {
+		return fmt.Errorf("expected read without fs rules to be denied, got %v", err)
+	}
+
+	return nil
+}
+
+// helperDevNullExact checks that the built-in rule allows /dev/null alone.
+func helperDevNullExact() error {
+	sb := newSandboxWithBaseExec(withIgnoreIfMissing())
+	cmd := sb.Command("/usr/bin/head", "-c", "1", "/dev/zero")
+	if cmd.Err != nil {
+		if isLandlockSkip(cmd.Err) {
+			return fmt.Errorf("SKIP: landlock unavailable: %v", cmd.Err)
+		}
+		return fmt.Errorf("enforce failed: %w", cmd.Err)
+	}
+
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		return fmt.Errorf("expected read of /dev/zero to be denied, got %q", out)
+	}
+	if !strings.Contains(strings.ToLower(string(out)), "permission denied") {
+		return fmt.Errorf("expected permission denial, got %v: %s", err, strings.TrimSpace(string(out)))
+	}
+
+	// The sandbox also applies to this process.
+	if _, err := os.Open("/dev/zero"); !errors.Is(err, os.ErrPermission) {
+		return fmt.Errorf("expected open of /dev/zero to be denied, got %v", err)
+	}
+
+	return nil
+}
+
+// helperDevNullABI checks the built-in rule at the ABI in SANDBOXEC_ABI, where
+// the kernel handles rights that the pinned ABI does not, such as ioctl_dev
+// below ABI 5.
+func helperDevNullABI() error {
+	abi, err := strconv.Atoi(os.Getenv("SANDBOXEC_ABI"))
+	if err != nil {
+		return fmt.Errorf("parse SANDBOXEC_ABI: %w", err)
+	}
+
+	return helperDevNull(withABI(abi))
+}
+
 func runWithTimeout(useSandbox bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancel()
@@ -868,7 +941,6 @@ func newSandboxWithBaseExec(opts ...Option) *Sandboxec {
 		WithFSRule("/lib64", access.FS_READ_EXEC),
 		WithFSRule("/usr/lib", access.FS_READ_EXEC),
 		WithFSRule("/usr/lib64", access.FS_READ_EXEC),
-		WithFSRule("/dev/null", access.FS_READ_WRITE),
 	)
 	return New(opts...)
 }

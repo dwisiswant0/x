@@ -58,6 +58,10 @@ func TestHelperProcessDarwin(t *testing.T) {
 		err = helperDarwinFSPathInjection()
 	case "one-policy-per-process":
 		err = helperDarwinOnePolicyPerProcess()
+	case "dev-null":
+		err = helperDarwinDevNull()
+	case "dev-null-exact":
+		err = helperDarwinDevNullExact()
 	default:
 		fmt.Fprintf(os.Stderr, "unknown darwin scenario: %s\n", scenario)
 		os.Exit(2)
@@ -175,8 +179,8 @@ func helperDarwinNoFSRules(opts ...Option) error {
 		return fmt.Errorf("enforce failed: %w", cmd.Err)
 	}
 
-	// Pass stdin through so the sandboxed parent never has to open /dev/null.
-	cmd.Stdin = os.Stdin
+	// The nil stdin makes os/exec open /dev/null, which the sandbox allows, so
+	// the failure comes from the exec itself.
 	if out, err := cmd.CombinedOutput(); !isExecDenied(err) {
 		return fmt.Errorf("expected exec without fs rules to be denied, got %v: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -188,7 +192,6 @@ func helperDarwinExecRequiresRX() error {
 	sb := New(
 		WithFSRule("/usr", access.FS_READ),
 		WithFSRule("/bin", access.FS_READ),
-		WithFSRule("/dev/null", access.FS_READ_WRITE),
 	)
 	cmd := sb.Command("/bin/echo", "hello")
 	if cmd.Err != nil {
@@ -211,7 +214,6 @@ func helperDarwinScriptInterpreter(binRights access.FS) error {
 	sb := New(
 		WithFSRule("/usr", access.FS_READ_EXEC),
 		WithFSRule("/bin", binRights),
-		WithFSRule("/dev/null", access.FS_READ_WRITE),
 		WithFSRule(dir, access.FS_READ_EXEC),
 	)
 	cmd := sb.Command(script)
@@ -237,7 +239,6 @@ func helperDarwinFSNarrowExec() error {
 	sb := New(
 		WithFSRule("/usr", access.FS_READ_EXEC),
 		WithFSRule("/bin", access.FS_READ_EXEC),
-		WithFSRule("/dev/null", access.FS_READ_WRITE),
 	)
 	cmd := sb.Command("/bin/echo", "hello")
 	if cmd.Err != nil {
@@ -261,7 +262,6 @@ func helperDarwinTouchAllowed() error {
 
 	sb := New(
 		WithFSRule("/usr", access.FS_READ_EXEC),
-		WithFSRule("/dev/null", access.FS_READ_WRITE),
 		WithFSRule(dir, access.FS_READ_WRITE),
 	)
 	cmd := sb.Command("/usr/bin/touch", target)
@@ -284,7 +284,6 @@ func helperDarwinTouchDenied() error {
 
 	sb := New(
 		WithFSRule("/", access.FS_READ_EXEC),
-		WithFSRule("/dev/null", access.FS_READ_WRITE),
 	)
 	cmd := sb.Command("/usr/bin/touch", target)
 	if cmd.Err != nil {
@@ -306,7 +305,6 @@ func helperDarwinFSPathInjection() error {
 
 	sb := New(
 		WithFSRule("/usr", access.FS_READ_EXEC),
-		WithFSRule("/dev/null", access.FS_READ_WRITE),
 		WithFSRule(link, access.FS_READ_WRITE),
 	)
 	cmd := sb.Command("/usr/bin/touch", blocked)
@@ -319,6 +317,68 @@ func helperDarwinFSPathInjection() error {
 	}
 	if out, err := sb.Command("/usr/bin/touch", allowed).CombinedOutput(); err != nil {
 		return fmt.Errorf("touch inside rule failed: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+
+	return nil
+}
+
+// helperDarwinDevNull checks that a sandbox without a /dev/null rule still lets
+// os/exec open /dev/null for the command's nil standard streams.
+func helperDarwinDevNull() error {
+	sb := New(
+		WithFSRule("/usr", access.FS_READ_EXEC),
+		WithFSRule("/bin", access.FS_READ_EXEC),
+	)
+
+	// A nil stdin makes os/exec open /dev/null for reading.
+	cmd := sb.Command("/bin/echo", "hello")
+	if cmd.Err != nil {
+		return fmt.Errorf("enforce failed: %w", cmd.Err)
+	}
+	if out, err := cmd.Output(); err != nil || string(out) != "hello\n" {
+		return fmt.Errorf("expected output with nil stdin, got %v: %q", err, out)
+	}
+
+	// Nil stdout and stderr make it open /dev/null for writing.
+	if err := sb.Command("/bin/echo", "hello").Run(); err != nil {
+		return fmt.Errorf("expected run with nil streams, got %w", err)
+	}
+
+	return expectReadDenied(os.Getenv("SANDBOXEC_FILE"))
+}
+
+// helperDarwinDevNullExact checks that the built-in rule allows /dev/null
+// alone.
+func helperDarwinDevNullExact() error {
+	sb := New(
+		WithFSRule("/usr", access.FS_READ_EXEC),
+		WithFSRule("/bin", access.FS_READ_EXEC),
+	)
+	cmd := sb.Command("/usr/bin/head", "-c", "1", "/dev/zero")
+	if cmd.Err != nil {
+		return fmt.Errorf("enforce failed: %w", cmd.Err)
+	}
+
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		return fmt.Errorf("expected read of /dev/zero to be denied, got %q", out)
+	}
+	if !strings.Contains(string(out), "Operation not permitted") {
+		return fmt.Errorf("expected permission denial, got %v: %s", err, strings.TrimSpace(string(out)))
+	}
+
+	// Writing to /dev/null is allowed, but changing the file itself is not.
+	out, err = sb.Command("/usr/bin/touch", "/dev/null").CombinedOutput()
+	if err == nil {
+		return fmt.Errorf("expected touch of /dev/null to be denied, got %q", out)
+	}
+	if !strings.Contains(string(out), "Operation not permitted") {
+		return fmt.Errorf("expected permission denial for touch, got %v: %s", err, strings.TrimSpace(string(out)))
+	}
+
+	// The sandbox also applies to this process.
+	if _, err := os.Open("/dev/zero"); !errors.Is(err, os.ErrPermission) {
+		return fmt.Errorf("expected open of /dev/zero to be denied, got %v", err)
 	}
 
 	return nil
@@ -360,7 +420,6 @@ func runWithTimeout(useSandbox bool) error {
 		sb := New(
 			WithBestEffort(),
 			WithFSRule("/", access.FS_READ_EXEC),
-			WithFSRule("/dev/null", access.FS_READ_WRITE),
 		)
 		cmd := sb.CommandContext(ctx, "/bin/sleep", "5")
 
@@ -395,12 +454,10 @@ func helperDarwinOnePolicyPerProcess() error {
 	file := os.Getenv("SANDBOXEC_FILE")
 	broad := []Option{
 		WithFSRule("/", access.FS_READ_EXEC),
-		WithFSRule("/dev/null", access.FS_READ_WRITE),
 	}
 	narrow := []Option{
 		WithFSRule("/usr", access.FS_READ_EXEC),
 		WithFSRule("/bin", access.FS_READ_EXEC),
-		WithFSRule("/dev/null", access.FS_READ_WRITE),
 	}
 
 	if cmd := New(broad...).Command("/usr/bin/true"); cmd.Err != nil {
