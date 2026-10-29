@@ -1,0 +1,19 @@
+name: ♾️ Compatibility Checks
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+    branches: ["master"]
+
+jobs:
+  compat-checks:
+    if: ${{ github.actor == 'dependabot[bot]' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "stable"
+      - run: go vet ./...
