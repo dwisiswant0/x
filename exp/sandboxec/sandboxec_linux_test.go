@@ -147,6 +147,41 @@ func TestTouchAllowedAtEveryABI(t *testing.T) {
 	}
 }
 
+// From ABI 2, an FS_READ_WRITE rule allows moving a file into a subdirectory,
+// even when the sandbox also restricts the network or scoped IPC. At ABI 1,
+// Landlock always denies the move.
+func TestRenameAcrossDirs(t *testing.T) {
+	variants := []struct {
+		suffix string
+		minABI int
+		envKey string
+	}{
+		{"", 1, ""},
+		{"-best-effort", 1, "SANDBOXEC_BEST_EFFORT"},
+		{"-net-rule", 4, "SANDBOXEC_NET_RULE"},
+		{"-scoped", 6, "SANDBOXEC_SCOPED"},
+	}
+
+	for abi := 1; abi <= config.MaxABI; abi++ {
+		for _, v := range variants {
+			if abi < v.minABI {
+				continue
+			}
+
+			env := map[string]string{"SANDBOXEC_ABI": strconv.Itoa(abi)}
+			if v.envKey != "" {
+				env[v.envKey] = "1"
+			}
+
+			t.Run(fmt.Sprintf("abi%d%s", abi, v.suffix), func(t *testing.T) {
+				// The sandboxed helper cannot remove the directory itself.
+				env["SANDBOXEC_DIR"] = t.TempDir()
+				runHelper(t, "rename-across-dirs", env)
+			})
+		}
+	}
+}
+
 func TestTouchDenied(t *testing.T) {
 	runHelper(t, "touch-denied", nil)
 }

@@ -55,20 +55,41 @@ func resetLandlockABICacheForTest() {
 	landlockABIOnce = sync.Once{}
 }
 
+// toLandlockConfig matches go-landlock's preset for each ABI, minus the scoped
+// IPC restrictions when scoped is false.
 func TestLinuxToLandlockConfig(t *testing.T) {
 	t.Cleanup(resetLandlockABICacheForTest)
 
+	presets := []landlock.Config{
+		landlock.V1, landlock.V2, landlock.V3, landlock.V4, landlock.V5, landlock.V6, landlock.V7,
+	}
+
 	for version := 1; version <= config.MaxABI; version++ {
-		if _, err := toLandlockConfig(version); err != nil {
-			t.Fatalf("expected ABI %d to be supported, got %v", version, err)
+		preset := presets[version-1]
+
+		// ABIs 6 and 7 add only scoped IPC and logging flags to ABI 5.
+		unscoped := preset
+		if version >= 6 {
+			unscoped = landlock.V5
+		}
+
+		for scoped, want := range map[bool]landlock.Config{true: preset, false: unscoped} {
+			got, err := toLandlockConfig(version, scoped)
+			if err != nil {
+				t.Fatalf("expected ABI %d to be supported, got %v", version, err)
+			}
+
+			if got != want {
+				t.Errorf("toLandlockConfig(%d, %v) = %v, want %v", version, scoped, got, want)
+			}
 		}
 	}
 
-	if _, err := toLandlockConfig(0); !errors.Is(err, ErrInvalidOption) {
+	if _, err := toLandlockConfig(0, false); !errors.Is(err, ErrInvalidOption) {
 		t.Fatalf("expected ErrInvalidOption for ABI 0, got %v", err)
 	}
 
-	if _, err := toLandlockConfig(config.MaxABI + 1); !errors.Is(err, ErrInvalidOption) {
+	if _, err := toLandlockConfig(config.MaxABI+1, false); !errors.Is(err, ErrInvalidOption) {
 		t.Fatalf("expected ErrInvalidOption for ABI %d, got %v", config.MaxABI+1, err)
 	}
 }
