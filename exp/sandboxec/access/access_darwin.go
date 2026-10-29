@@ -1,4 +1,3 @@
-// nolint
 //go:build darwin
 // +build darwin
 

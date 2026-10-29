@@ -1,4 +1,3 @@
-// nolint
 //go:build linux
 // +build linux
 
