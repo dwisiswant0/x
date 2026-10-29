@@ -68,6 +68,8 @@ func TestHelperProcess(t *testing.T) {
 		err = helperWaitDelay()
 	case "touch-allowed":
 		err = helperTouchAllowed()
+	case "touch-allowed-abi":
+		err = helperTouchAllowedABI()
 	case "touch-denied":
 		err = helperTouchDenied()
 	case "curl-allowed":
@@ -540,7 +542,7 @@ func helperWaitDelay() error {
 	return nil
 }
 
-func helperTouchAllowed() error {
+func helperTouchAllowed(opts ...Option) error {
 	tmpDir, err := os.MkdirTemp("", "sandboxec-touch-")
 	if err != nil {
 		return err
@@ -550,10 +552,10 @@ func helperTouchAllowed() error {
 	}()
 
 	target := filepath.Join(tmpDir, "allowed.txt")
-	sb := newSandboxWithBaseExec(
+	sb := newSandboxWithBaseExec(append(opts,
 		WithFSRule("/bin", access.FS_READ_EXEC),
 		WithFSRule(tmpDir, access.FS_READ_WRITE),
-	)
+	)...)
 	cmd := sb.Command("/bin/touch", target)
 	if cmd.Err != nil {
 		if isLandlockSkip(cmd.Err) {
@@ -568,7 +570,34 @@ func helperTouchAllowed() error {
 		return fmt.Errorf("expected file to exist: %w", err)
 	}
 
+	// The sandbox also applies to this process, so it cannot read files that
+	// no rule allows. This fails if enforcement silently did nothing.
+	if _, err := os.ReadFile("/etc/hosts"); !errors.Is(err, os.ErrPermission) {
+		return fmt.Errorf("expected read outside the rules to be denied, got %v", err)
+	}
+
 	return nil
+}
+
+// helperTouchAllowedABI runs helperTouchAllowed at the ABI in SANDBOXEC_ABI,
+// with best-effort enforcement if SANDBOXEC_BEST_EFFORT is set.
+func helperTouchAllowedABI() error {
+	abi, err := strconv.Atoi(os.Getenv("SANDBOXEC_ABI"))
+	if err != nil {
+		return fmt.Errorf("parse SANDBOXEC_ABI: %w", err)
+	}
+
+	opts := []Option{withABI(abi)}
+	if os.Getenv("SANDBOXEC_BEST_EFFORT") != "" {
+		// Without Landlock, best-effort mode enforces nothing to check.
+		if _, err := getLandlockABIVersion(); err != nil {
+			return fmt.Errorf("SKIP: landlock unavailable: %v", err)
+		}
+
+		opts = append(opts, WithBestEffort())
+	}
+
+	return helperTouchAllowed(opts...)
 }
 
 func helperTouchDenied() error {

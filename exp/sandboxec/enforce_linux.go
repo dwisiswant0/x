@@ -56,6 +56,23 @@ func landlockABI(cfg *config.Config) int {
 	return cfg.ABI
 }
 
+// ruleABI returns the ABI that filesystem rules must fit, which is the
+// selected ABI abi unless best-effort mode runs on a kernel with an older ABI.
+// go-landlock then enforces the kernel's ABI, and if a rule holds refer that
+// the kernel's ABI does not handle, it enforces nothing at all.
+func ruleABI(cfg *config.Config, abi int) int {
+	if !cfg.BestEffort {
+		return abi
+	}
+
+	supported, err := getLandlockABIVersion()
+	if err != nil || supported >= abi {
+		return abi
+	}
+
+	return supported
+}
+
 func toLandlockConfig(version int) (landlock.Config, error) {
 	switch version {
 	case 1:
@@ -118,11 +135,12 @@ func (s *Sandboxec) enforce() error {
 		return err
 	}
 
+	fsABI := ruleABI(&s.cfg, abi)
 	hasFSRules := len(s.cfg.FSRules) > 0
 	hasNetRules := len(s.cfg.NetRules) > 0
 
 	if !hasFSRules && !hasNetRules && !s.cfg.RestrictScoped {
-		if err := cfg.Restrict(devNullRule(abi)); err != nil {
+		if err := cfg.Restrict(devNullRule(fsABI)); err != nil {
 			return fmt.Errorf("landlock default restrict failed: %w", err)
 		}
 
@@ -132,12 +150,12 @@ func (s *Sandboxec) enforce() error {
 	// The filesystem is deny-by-default: without FS rules, deny all of it,
 	// even when only network or scoped restrictions are set. The one
 	// exception is /dev/null, which every sandbox allows.
-	rules, err := s.buildFSRules()
+	rules, err := s.buildFSRules(fsABI)
 	if err != nil {
 		return err
 	}
 
-	rules = append(rules, devNullRule(abi))
+	rules = append(rules, devNullRule(fsABI))
 
 	if err := cfg.RestrictPaths(rules...); err != nil {
 		return fmt.Errorf("landlock restrict paths failed: %w", err)
@@ -180,34 +198,23 @@ func (s *Sandboxec) enforce() error {
 // /proc/self/fd/N, so a rule for them would grant whatever file the process's
 // standard streams point at.
 //
-// It grants what a read-write file rule would, limited to the rights that abi
-// handles. go-landlock checks a rule's rights against the handled set before
-// any best-effort downgrade, so a right that abi does not handle, such as
-// ioctl_dev below ABI 5, would make enforcement fail.
+// It grants what a read-write file rule would.
 func devNullRule(abi int) landlock.Rule {
-	rights := landlock.AccessFSSet(syscall.AccessFSReadFile | syscall.AccessFSWriteFile)
-
-	if abi >= 3 {
-		rights |= landlock.AccessFSSet(syscall.AccessFSTruncate)
-	}
-
-	if abi >= 5 {
-		rights |= landlock.AccessFSSet(syscall.AccessFSIoctlDev)
-	}
+	rights := filterAccess(access.FS_READ_WRITE, false, abi)
 
 	// A system without /dev/null, such as a minimal container, still enforces.
 	return landlock.PathAccess(rights, "/dev/null").IgnoreIfMissing()
 }
 
-func (s *Sandboxec) buildFSRules() ([]landlock.Rule, error) {
+func (s *Sandboxec) buildFSRules(abi int) ([]landlock.Rule, error) {
 	var rules []landlock.Rule
 
 	for _, rule := range s.cfg.FSRules {
 		info, err := os.Stat(rule.Path)
 		if err != nil {
 			if os.IsNotExist(err) && s.cfg.IgnoreIfMissing {
-				fileAccess := filterAccess(rule.Rights, false)
-				dirAccess := filterAccess(rule.Rights, true)
+				fileAccess := filterAccess(rule.Rights, false, abi)
+				dirAccess := filterAccess(rule.Rights, true, abi)
 
 				if fileAccess != 0 {
 					fsRule := landlock.PathAccess(fileAccess, rule.Path).IgnoreIfMissing()
@@ -225,7 +232,7 @@ func (s *Sandboxec) buildFSRules() ([]landlock.Rule, error) {
 			return nil, fmt.Errorf("filesystem path %q: %w", rule.Path, err)
 		}
 
-		fsRule := landlock.PathAccess(filterAccess(rule.Rights, info.IsDir()), rule.Path)
+		fsRule := landlock.PathAccess(filterAccess(rule.Rights, info.IsDir(), abi), rule.Path)
 
 		if s.cfg.IgnoreIfMissing {
 			fsRule = fsRule.IgnoreIfMissing()
@@ -237,8 +244,29 @@ func (s *Sandboxec) buildFSRules() ([]landlock.Rule, error) {
 	return rules, nil
 }
 
-func filterAccess(rights access.FS, isDir bool) landlock.AccessFSSet {
+// filterAccess returns the Landlock rights that rights grant on a file, or on
+// a directory if isDir, at Landlock ABI abi.
+//
+// It drops the rights that Landlock added after abi, such as ioctl_dev below
+// ABI 5, because go-landlock rejects a rule that holds one, even in
+// best-effort mode.
+// A ruleset at abi does not restrict those rights anyway, except refer, which
+// ABI 1 always denies.
+func filterAccess(rights access.FS, isDir bool, abi int) landlock.AccessFSSet {
 	accessSet := landlock.AccessFSSet(rights)
+
+	if abi < 2 {
+		accessSet &^= syscall.AccessFSRefer
+	}
+
+	if abi < 3 {
+		accessSet &^= syscall.AccessFSTruncate
+	}
+
+	if abi < 5 {
+		accessSet &^= syscall.AccessFSIoctlDev
+	}
+
 	if isDir {
 		return accessSet
 	}
