@@ -24,6 +24,7 @@ const (
 	FileReadData      Operation = "file-read-data"
 	FileReadMetadata  Operation = "file-read-metadata"
 	FileWrite         Operation = "file-write*"
+	FileWriteData     Operation = "file-write-data"
 	FileMapExecutable Operation = "file-map-executable"
 	ProcessExec       Operation = "process-exec*"
 	NetworkInbound    Operation = "network-inbound"

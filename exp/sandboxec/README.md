@@ -19,7 +19,7 @@ go get go.dw1.io/x/exp/sandboxec
 
 ## Quick start
 
-This program runs `/bin/echo` in a sandbox that grants read and execute access to `/usr` and `/bin`, and read and write access to `/dev/null`:
+This program runs `/bin/echo` in a sandbox that grants read and execute access to `/usr` and `/bin`:
 
 ```go
 package main
@@ -36,7 +36,6 @@ func main() {
 	sb := sandboxec.New(
 		sandboxec.WithFSRule("/usr", access.FS_READ_EXEC),
 		sandboxec.WithFSRule("/bin", access.FS_READ_EXEC),
-		sandboxec.WithFSRule("/dev/null", access.FS_READ_WRITE),
 	)
 
 	out, err := sb.Command("/bin/echo", "hello").Output()
@@ -54,10 +53,7 @@ It prints:
 hello
 ```
 
-Each rule covers something the command or `os/exec` needs:
-
-- `echo` and the libraries it loads live under `/usr` and `/bin`, as they do on macOS and on Linux distributions with a merged `/usr`. `FS_READ_EXEC` lets the command read those files and run them.
-- `os/exec` opens `/dev/null` for each standard stream you leave `nil`. It opens the file in your process after the sandbox is in place, so without the `/dev/null` rule, `Output` fails with a permission error on `/dev/null`.
+`echo` and the libraries it loads live under `/usr` and `/bin`, as they do on macOS and on Linux distributions with a merged `/usr`.
 
 ## How enforcement works
 
@@ -96,7 +92,7 @@ To start a program, the rules must grant `FS_READ_EXEC` on:
 - On Linux, its dynamic loader.
 - The shared libraries it loads. On Linux, `FS_READ` is enough for these.
 
-Also grant `FS_READ_WRITE` on `/dev/null` unless you set all three standard streams, as [Quick start](#quick-start) explains.
+You don't need a rule for `/dev/null`. Every sandbox allows reading and writing it, because `os/exec` opens it for each standard stream you leave `nil`.
 
 On Linux, every rule path must exist when the sandbox is enforced, or enforcement fails. With `landlock.WithIgnoreIfMissing()`, rules skip missing paths instead.
 
@@ -162,7 +158,7 @@ sb := sandboxec.New(
 
 - Enforcement sets `no_new_privs` on the process, so setuid and file-capability programs, such as `sudo`, don't gain privileges when the process or its commands run them.
 - Each `Sandboxec` adds its restrictions on top of those already in place, and access then needs every set of rules to allow it. A second `Sandboxec` can only narrow access.
-- A `Sandboxec` with no rules at all restricts everything its ABI supports, including abstract UNIX sockets and signals on ABI 6 or later.
+- A `Sandboxec` with no rules restricts everything its ABI supports apart from `/dev/null`, including abstract UNIX sockets and signals on ABI 6 or later.
 - Landlock can't restrict some file operations, including `stat`, `chdir`, `chmod`, and `chown`. The [kernel documentation](https://docs.kernel.org/userspace-api/landlock.html#filesystem-flags) has the full list.
 
 ## macOS

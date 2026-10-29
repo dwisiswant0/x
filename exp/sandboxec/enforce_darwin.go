@@ -52,6 +52,13 @@ func seatbeltPolicy(cfg *config.Config) seatbelt.Policy {
 		// dyld reads the root directory to locate its shared cache; without
 		// this, every exec aborts with SIGABRT before reaching main.
 		seatbelt.Allow(seatbelt.FileReadData, seatbelt.Literal("/")),
+		// os/exec opens /dev/null in the sandboxed process for a nil standard
+		// stream, so every sandbox allows it, and nothing else under /dev.
+		// Only its data and metadata: file-write* would also let a command
+		// remove it, replace it, or change its mode and times.
+		seatbelt.Allow(seatbelt.FileReadData, seatbelt.Literal("/dev/null")),
+		seatbelt.Allow(seatbelt.FileReadMetadata, seatbelt.Literal("/dev/null")),
+		seatbelt.Allow(seatbelt.FileWriteData, seatbelt.Literal("/dev/null")),
 	}
 
 	for _, rule := range cfg.FSRules {
