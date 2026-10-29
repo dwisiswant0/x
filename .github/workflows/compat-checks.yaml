@@ -19,21 +19,45 @@ jobs:
         with:
           go-version: "stable"
           cache-dependency-path: "**/go.sum"
-      - name: Run go vet on changed modules
+      - name: Find changed modules
+        id: changes
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.sha }}
         run: |
-          mapfile -t modules < <(git diff --name-only "$BASE" "$HEAD" -- '*go.mod' '*go.sum' | xargs -r -n1 dirname | sort -u)
-          if [ ${#modules[@]} -eq 0 ]; then
-            echo "No modules changed"
-            exit 0
-          fi
-
+          modules=$(git diff --name-only "$BASE" "$HEAD" -- '*go.mod' '*go.sum' | xargs -r -n1 dirname | sort -u | xargs)
+          echo "modules=$modules" >> "$GITHUB_OUTPUT"
+          [ -n "$modules" ] || echo "No modules changed"
+      - name: Run go vet on changed modules
+        if: ${{ steps.changes.outputs.modules != '' }}
+        env:
+          MODULES: ${{ steps.changes.outputs.modules }}
+        run: |
           status=0
-          for dir in "${modules[@]}"; do
+          for dir in $MODULES; do
             echo "::group::go vet $dir"
             (cd "$dir" && go vet ./...) || status=1
             echo "::endgroup::"
+          done
+          exit "$status"
+      - uses: golangci/golangci-lint-action@v9
+        if: ${{ steps.changes.outputs.modules != '' }}
+        with:
+          version: "latest"
+          install-only: true
+      # Cross-compiling disables cgo, so darwin and windows lint their
+      # cgo-free builds.
+      - name: Run golangci-lint on changed modules
+        if: ${{ steps.changes.outputs.modules != '' }}
+        env:
+          MODULES: ${{ steps.changes.outputs.modules }}
+        run: |
+          status=0
+          for dir in $MODULES; do
+            for goos in linux darwin windows; do
+              echo "::group::golangci-lint $dir (GOOS=$goos)"
+              (cd "$dir" && GOOS="$goos" golangci-lint run ./...) || status=1
+              echo "::endgroup::"
+            done
           done
           exit "$status"
