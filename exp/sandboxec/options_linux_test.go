@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/landlock-lsm/go-landlock/landlock"
+	"github.com/landlock-lsm/go-landlock/landlock/syscall"
 	"go.dw1.io/x/exp/sandboxec/access"
 	"go.dw1.io/x/exp/sandboxec/internal/config"
 )
@@ -106,6 +108,58 @@ func TestLinuxLandlockABI(t *testing.T) {
 
 	if got := landlockABI(&config.Config{ABI: 3}); got != 3 {
 		t.Fatalf("landlockABI with ABI 3 = %d, want 3", got)
+	}
+}
+
+// filterAccess keeps every right that the ABI handles and drops the ones that
+// Landlock added later.
+func TestLinuxFilterAccessFitsABI(t *testing.T) {
+	// The rights that Landlock added after each ABI.
+	newer := map[int]landlock.AccessFSSet{
+		1: syscall.AccessFSRefer | syscall.AccessFSTruncate | syscall.AccessFSIoctlDev,
+		2: syscall.AccessFSTruncate | syscall.AccessFSIoctlDev,
+		3: syscall.AccessFSIoctlDev,
+		4: syscall.AccessFSIoctlDev,
+	}
+
+	dirRights := landlock.AccessFSSet(access.FS_READ_WRITE_EXEC)
+	fileRights := landlock.AccessFSSet(syscall.AccessFSExecute | syscall.AccessFSWriteFile |
+		syscall.AccessFSReadFile | syscall.AccessFSTruncate | syscall.AccessFSIoctlDev)
+
+	for abi := 1; abi <= config.MaxABI; abi++ {
+		if got, want := filterAccess(access.FS_READ_WRITE_EXEC, true, abi), dirRights&^newer[abi]; got != want {
+			t.Errorf("filterAccess for a directory at ABI %d = %v, want %v", abi, got, want)
+		}
+
+		if got, want := filterAccess(access.FS_READ_WRITE_EXEC, false, abi), fileRights&^newer[abi]; got != want {
+			t.Errorf("filterAccess for a file at ABI %d = %v, want %v", abi, got, want)
+		}
+	}
+}
+
+func TestLinuxRuleABI(t *testing.T) {
+	t.Cleanup(resetLandlockABICacheForTest)
+
+	strict := &config.Config{}
+	bestEffort := &config.Config{BestEffort: true}
+
+	setLandlockABICacheForTest(1, nil)
+	if got := ruleABI(bestEffort, 4); got != 1 {
+		t.Fatalf("best-effort ruleABI(4) on ABI 1 kernel = %d, want 1", got)
+	}
+
+	if got := ruleABI(strict, 4); got != 4 {
+		t.Fatalf("strict ruleABI(4) on ABI 1 kernel = %d, want 4", got)
+	}
+
+	setLandlockABICacheForTest(config.MaxABI, nil)
+	if got := ruleABI(bestEffort, 4); got != 4 {
+		t.Fatalf("best-effort ruleABI(4) on ABI %d kernel = %d, want 4", config.MaxABI, got)
+	}
+
+	setLandlockABICacheForTest(0, errors.New("unavailable"))
+	if got := ruleABI(bestEffort, 4); got != 4 {
+		t.Fatalf("best-effort ruleABI(4) without Landlock = %d, want 4", got)
 	}
 }
 

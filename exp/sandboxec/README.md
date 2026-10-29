@@ -138,6 +138,8 @@ By default, `sandboxec` uses the newest Landlock ABI that both the kernel and th
 
 Treat the kernel versions as a guide and check the ABI, because distribution kernels can backport Landlock features.
 
+Filesystem rules work with every ABI, but an older ABI controls fewer operations. With ABI 1, Landlock always blocks moving and linking files between directories, so no rule can allow it.
+
 ### Linux-only options
 
 The `landlock` package holds options that only Landlock supports. Code that uses them must build only for Linux, for example in a `_linux.go` file, because they exist only on Linux.

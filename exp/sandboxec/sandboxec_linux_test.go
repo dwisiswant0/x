@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"go.dw1.io/x/exp/sandboxec/access"
+	"go.dw1.io/x/exp/sandboxec/internal/config"
 )
 
 func subprocess(scenario string, env map[string]string) ([]byte, error) {
@@ -125,6 +126,25 @@ func TestWaitDelayBehavior(t *testing.T) {
 
 func TestTouchAllowed(t *testing.T) {
 	runHelper(t, "touch-allowed", nil)
+}
+
+// An FS_READ_WRITE rule applies at every ABI, although it holds rights that
+// older ABIs do not handle, such as ioctl_dev below ABI 5.
+func TestTouchAllowedAtEveryABI(t *testing.T) {
+	for abi := 1; abi <= config.MaxABI; abi++ {
+		for _, bestEffort := range []bool{false, true} {
+			name := fmt.Sprintf("abi%d", abi)
+			env := map[string]string{"SANDBOXEC_ABI": strconv.Itoa(abi)}
+			if bestEffort {
+				name += "-best-effort"
+				env["SANDBOXEC_BEST_EFFORT"] = "1"
+			}
+
+			t.Run(name, func(t *testing.T) {
+				runHelper(t, "touch-allowed-abi", env)
+			})
+		}
+	}
 }
 
 func TestTouchDenied(t *testing.T) {
