@@ -150,20 +150,23 @@ func runinterp(interp, file string) ([]string, error) {
 
 func getDepCache() *fastcache.Cache[string, depCacheEntry] {
 	depCacheOnce.Do(func() {
-		cacheDir, err := os.UserCacheDir()
-		if err != nil || cacheDir == "" {
-			depCache = fastcache.New[string, depCacheEntry](16_384)
-			return
+		if cacheDir, err := os.UserCacheDir(); err == nil && cacheDir != "" {
+			file := filepath.Join(cacheDir, "go.dw1.io", "x", "exp", "sandboxec", "ldd", "deps.cache")
+			if err := os.MkdirAll(filepath.Dir(file), 0o755); err == nil {
+				depCacheFile = file
+			}
 		}
 
-		depCacheFile = filepath.Join(cacheDir, "go.dw1.io", "x", "exp", "sandboxec", "ldd", "deps.cache")
-		if err := os.MkdirAll(filepath.Dir(depCacheFile), 0o755); err != nil {
-			depCache = fastcache.New[string, depCacheEntry](16_384)
-			depCacheFile = ""
-			return
+		var err error
+		if depCacheFile == "" {
+			depCache, err = fastcache.New[string, depCacheEntry](16_384)
+		} else {
+			depCache, err = fastcache.LoadFromFileOrNew[string, depCacheEntry](depCacheFile, 16_384)
 		}
-
-		depCache = fastcache.LoadFromFileOrNew[string, depCacheEntry](depCacheFile, 16_384)
+		if err != nil {
+			// Only a capacity below 1 fails, which is a bug.
+			panic(err)
+		}
 	})
 
 	return depCache
@@ -431,8 +434,9 @@ func List(names ...string) ([]string, error) {
 				}
 
 				if cacheKey != "" {
-					cache.Set(cacheKey, depCacheEntry{Interp: interp, SONames: sonames})
-					maybeSaveDepCache()
+					if err := cache.Set(cacheKey, depCacheEntry{Interp: interp, SONames: sonames}); err == nil {
+						maybeSaveDepCache()
+					}
 				}
 
 				results <- listResult{interp: interp, sonames: sonames}

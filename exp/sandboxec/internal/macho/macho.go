@@ -53,8 +53,9 @@ func GetDependencies(root string) ([]string, error) {
 
 		deps, complete := getDeps(root)
 		if complete {
-			cache.Set(key, depCacheEntry{Deps: deps})
-			maybeSaveDepCache()
+			if err := cache.Set(key, depCacheEntry{Deps: deps}); err == nil {
+				maybeSaveDepCache()
+			}
 		}
 
 		return dylibs(deps), nil
@@ -315,20 +316,23 @@ func openMachO(path string, cpu macho.Cpu) ([]*macho.File, macho.Cpu, func(), er
 
 func getDepCache() *fastcache.Cache[string, depCacheEntry] {
 	depCacheOnce.Do(func() {
-		cacheDir, err := os.UserCacheDir()
-		if err != nil || cacheDir == "" {
-			depCache = fastcache.New[string, depCacheEntry](16_384)
-			return
+		if cacheDir, err := os.UserCacheDir(); err == nil && cacheDir != "" {
+			file := filepath.Join(cacheDir, "go.dw1.io", "x", "exp", "sandboxec", "macho", "deps.cache")
+			if err := os.MkdirAll(filepath.Dir(file), 0o755); err == nil {
+				depCacheFile = file
+			}
 		}
 
-		depCacheFile = filepath.Join(cacheDir, "go.dw1.io", "x", "exp", "sandboxec", "macho", "deps.cache")
-		if err := os.MkdirAll(filepath.Dir(depCacheFile), 0o755); err != nil {
-			depCache = fastcache.New[string, depCacheEntry](16_384)
-			depCacheFile = ""
-			return
+		var err error
+		if depCacheFile == "" {
+			depCache, err = fastcache.New[string, depCacheEntry](16_384)
+		} else {
+			depCache, err = fastcache.LoadFromFileOrNew[string, depCacheEntry](depCacheFile, 16_384)
 		}
-
-		depCache = fastcache.LoadFromFileOrNew[string, depCacheEntry](depCacheFile, 16_384)
+		if err != nil {
+			// Only a capacity below 1 fails, which is a bug.
+			panic(err)
+		}
 	})
 
 	return depCache
