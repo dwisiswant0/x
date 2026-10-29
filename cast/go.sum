@@ -10,5 +10,5 @@ github.com/rogpeppe/go-internal v1.9.0 h1:73kH8U+JUqXU8lRuOHeVHaa/SZPifC7BkcraZV
 github.com/rogpeppe/go-internal v1.9.0/go.mod h1:WtVeX8xhTBvf0smdhujwtBcq4Qrzq/fJaraNFVN+nFs=
 github.com/spf13/cast v1.10.0 h1:h2x0u2shc1QuLHfxi+cTJvs30+ZAHOGRic8uyGTDWxY=
 github.com/spf13/cast v1.10.0/go.mod h1:jNfB8QC9IA6ZuY2ZjDp0KtFO2LZZlg4S/7bzP6qqeHo=
-go.dw1.io/safemath v0.2.0 h1:gMQCrQ5vqPSkc1tAla9Pq00exUSioCHbszzDKOE3Jcw=
-go.dw1.io/safemath v0.2.0/go.mod h1:iyccggsQn7DASg2/fIdJ/CFdPGMNGdy3txpEjt2F6ZY=
+go.dw1.io/safemath v0.3.0 h1:75UCaDXaWj4Aj8mM2/8673BhxI8auYkrRyDrwlYLN8g=
+go.dw1.io/safemath v0.3.0/go.mod h1:iyccggsQn7DASg2/fIdJ/CFdPGMNGdy3txpEjt2F6ZY=
