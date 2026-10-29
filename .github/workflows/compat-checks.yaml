@@ -13,7 +13,27 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@v7
         with:
           go-version: "stable"
-      - run: go vet ./...
+          cache-dependency-path: "**/go.sum"
+      - name: Run go vet on changed modules
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.sha }}
+        run: |
+          mapfile -t modules < <(git diff --name-only "$BASE" "$HEAD" -- '*go.mod' '*go.sum' | xargs -r -n1 dirname | sort -u)
+          if [ ${#modules[@]} -eq 0 ]; then
+            echo "No modules changed"
+            exit 0
+          fi
+
+          status=0
+          for dir in "${modules[@]}"; do
+            echo "::group::go vet $dir"
+            (cd "$dir" && go vet ./...) || status=1
+            echo "::endgroup::"
+          done
+          exit "$status"
