@@ -310,7 +310,9 @@ func TestListRefreshesEntryWithMissingLibrary(t *testing.T) {
 	}
 
 	missing := filepath.Join(t.TempDir(), "libmoved.so.1")
-	getDepCache().Set(key, depCacheEntry{Interp: interp, SONames: []string{missing}})
+	if err := getDepCache().Set(key, depCacheEntry{Interp: interp, SONames: []string{missing}}); err != nil {
+		t.Fatalf("Set returned error: %v", err)
+	}
 
 	got, err := List(exe)
 	if err != nil {
@@ -355,7 +357,9 @@ func TestListSkipsFilesThatAreNotLibraries(t *testing.T) {
 		t.Fatalf("Mkdir returned error: %v", err)
 	}
 	cache := getDepCache()
-	cache.Set(key, depCacheEntry{Interp: interp, SONames: append([]string{libs[0]}, notLibraries...)})
+	if err := cache.Set(key, depCacheEntry{Interp: interp, SONames: append([]string{libs[0]}, notLibraries...)}); err != nil {
+		t.Fatalf("Set returned error: %v", err)
+	}
 	t.Cleanup(func() { cache.Delete(key) })
 
 	got, err := List(exe)
