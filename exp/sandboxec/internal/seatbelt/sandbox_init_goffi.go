@@ -45,7 +45,7 @@ func sandboxInit(profile string) error {
 	errBufArg := unsafe.Pointer(&errBuf)
 	var result int32
 
-	err := ffi.CallFunction(
+	_, err := ffi.CallFunction(
 		&lib.sandboxInitCIF,
 		lib.sandboxInit,
 		unsafe.Pointer(&result),
@@ -128,12 +128,14 @@ func freeError(ptr unsafe.Pointer) error {
 		return nil
 	}
 
-	return ffi.CallFunction(
+	_, err := ffi.CallFunction(
 		&lib.sandboxFreeErrorCIF,
 		lib.sandboxFreeError,
 		nil,
 		[]unsafe.Pointer{unsafe.Pointer(&ptr)},
 	)
+
+	return err
 }
 
 func cString(ptr unsafe.Pointer) string {
