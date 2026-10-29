@@ -33,11 +33,12 @@ func TestHelperProcess(t *testing.T) {
 	var err error
 	switch scenario {
 	case "no-rules":
-		err = helperNoFSRulesDeniesFS()
+		// A sandbox without rules also restricts scoped IPC.
+		err = helperNoFSRulesDeniesFS(true)
 	case "net-only":
-		err = helperNoFSRulesDeniesFS(WithNetworkRule(443, access.NETWORK_CONNECT_TCP))
+		err = helperNoFSRulesDeniesFS(false, WithNetworkRule(443, access.NETWORK_CONNECT_TCP))
 	case "scoped-only":
-		err = helperNoFSRulesDeniesFS(withRestrictScoped())
+		err = helperNoFSRulesDeniesFS(true, withRestrictScoped())
 	case "parity-output":
 		err = helperParityOutput()
 	case "parity-pipes":
@@ -70,6 +71,8 @@ func TestHelperProcess(t *testing.T) {
 		err = helperTouchAllowed()
 	case "touch-allowed-abi":
 		err = helperTouchAllowedABI()
+	case "rename-across-dirs":
+		err = helperRenameAcrossDirs()
 	case "touch-denied":
 		err = helperTouchDenied()
 	case "curl-allowed":
@@ -102,8 +105,10 @@ func TestHelperProcess(t *testing.T) {
 }
 
 // helperNoFSRulesDeniesFS checks that a sandbox without filesystem rules
-// denies filesystem access, whatever other restrictions opts set.
-func helperNoFSRulesDeniesFS(opts ...Option) error {
+// denies filesystem access, whatever other restrictions opts set. It also
+// checks that the sandbox restricts scoped IPC exactly when scoped is set and
+// the default ABI is 6 or later.
+func helperNoFSRulesDeniesFS(scoped bool, opts ...Option) error {
 	cmd := New(opts...).Command("/bin/true")
 	if cmd.Err != nil {
 		if isLandlockSkip(cmd.Err) {
@@ -121,6 +126,20 @@ func helperNoFSRulesDeniesFS(opts ...Option) error {
 	// The sandbox also applies to this process, so it cannot read files.
 	if _, err := os.ReadFile("/etc/hosts"); !errors.Is(err, os.ErrPermission) {
 		return fmt.Errorf("expected read without fs rules to be denied, got %v", err)
+	}
+
+	return checkSignalParent(scoped && defaultABIVersion() >= 6)
+}
+
+// checkSignalParent checks that signaling the parent process, which is outside
+// the sandbox, fails if and only if denied is set.
+func checkSignalParent(denied bool) error {
+	err := syscall.Kill(os.Getppid(), 0)
+	if denied && !errors.Is(err, syscall.EPERM) {
+		return fmt.Errorf("expected signal outside the sandbox to be denied, got %v", err)
+	}
+	if !denied && err != nil {
+		return fmt.Errorf("expected signal outside the sandbox to be allowed, got %v", err)
 	}
 
 	return nil
@@ -579,25 +598,109 @@ func helperTouchAllowed(opts ...Option) error {
 	return nil
 }
 
-// helperTouchAllowedABI runs helperTouchAllowed at the ABI in SANDBOXEC_ABI,
-// with best-effort enforcement if SANDBOXEC_BEST_EFFORT is set.
-func helperTouchAllowedABI() error {
+// abiOptionsFromEnv returns the ABI in SANDBOXEC_ABI and the options that
+// select it, with best-effort enforcement if SANDBOXEC_BEST_EFFORT is set.
+func abiOptionsFromEnv() (int, []Option, error) {
 	abi, err := strconv.Atoi(os.Getenv("SANDBOXEC_ABI"))
 	if err != nil {
-		return fmt.Errorf("parse SANDBOXEC_ABI: %w", err)
+		return 0, nil, fmt.Errorf("parse SANDBOXEC_ABI: %w", err)
 	}
 
 	opts := []Option{withABI(abi)}
 	if os.Getenv("SANDBOXEC_BEST_EFFORT") != "" {
 		// Without Landlock, best-effort mode enforces nothing to check.
 		if _, err := getLandlockABIVersion(); err != nil {
-			return fmt.Errorf("SKIP: landlock unavailable: %v", err)
+			return 0, nil, fmt.Errorf("SKIP: landlock unavailable: %v", err)
 		}
 
 		opts = append(opts, WithBestEffort())
 	}
 
+	return abi, opts, nil
+}
+
+// helperTouchAllowedABI runs helperTouchAllowed at the ABI that
+// abiOptionsFromEnv reads.
+func helperTouchAllowedABI() error {
+	_, opts, err := abiOptionsFromEnv()
+	if err != nil {
+		return err
+	}
+
 	return helperTouchAllowed(opts...)
+}
+
+// helperRenameAcrossDirs gives SANDBOXEC_DIR an FS_READ_WRITE rule and moves a
+// file into a subdirectory of it, at the ABI that abiOptionsFromEnv reads. It
+// adds a network rule if SANDBOXEC_NET_RULE is set, and scoped IPC
+// restrictions if SANDBOXEC_SCOPED is set.
+func helperRenameAcrossDirs() error {
+	abi, opts, err := abiOptionsFromEnv()
+	if err != nil {
+		return err
+	}
+
+	dir := os.Getenv("SANDBOXEC_DIR")
+	src := filepath.Join(dir, "a")
+	dst := filepath.Join(dir, "sub", "a")
+	if err := os.WriteFile(src, nil, 0o600); err != nil {
+		return err
+	}
+	if err := os.Mkdir(filepath.Dir(dst), 0o700); err != nil {
+		return err
+	}
+
+	netRule := os.Getenv("SANDBOXEC_NET_RULE") != ""
+	scoped := os.Getenv("SANDBOXEC_SCOPED") != ""
+
+	opts = append(opts, WithFSRule(dir, access.FS_READ_WRITE))
+	if netRule {
+		opts = append(opts, WithNetworkRule(443, access.NETWORK_CONNECT_TCP))
+	}
+	if scoped {
+		opts = append(opts, withRestrictScoped())
+	}
+
+	if err := New(opts...).Command("/bin/true").Err; err != nil {
+		if isLandlockSkip(err) {
+			return fmt.Errorf("SKIP: landlock unavailable: %v", err)
+		}
+		return fmt.Errorf("enforce failed: %w", err)
+	}
+
+	// These fail if enforcement dropped a restriction that the options ask for,
+	// or added scoped IPC restrictions that they don't.
+	if _, err := os.ReadFile("/etc/hosts"); !errors.Is(err, os.ErrPermission) {
+		return fmt.Errorf("expected read outside the rules to be denied, got %v", err)
+	}
+	if netRule {
+		if _, err := net.Dial("tcp", "127.0.0.1:1"); !errors.Is(err, syscall.EACCES) {
+			return fmt.Errorf("expected connect without a rule to be denied, got %v", err)
+		}
+	}
+	if err := checkSignalParent(scoped); err != nil {
+		return err
+	}
+
+	// Best-effort mode enforces the kernel's ABI if it is older.
+	if supported, err := getLandlockABIVersion(); err == nil && supported < abi {
+		abi = supported
+	}
+
+	err = os.Rename(src, dst)
+	if abi < 2 {
+		// Landlock ABI 1 always denies moving files between directories.
+		if !errors.Is(err, syscall.EXDEV) {
+			return fmt.Errorf("expected rename at ABI 1 to fail with EXDEV, got %v", err)
+		}
+
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("rename across directories failed: %w", err)
+	}
+
+	return nil
 }
 
 func helperTouchDenied() error {

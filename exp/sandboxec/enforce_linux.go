@@ -73,25 +73,33 @@ func ruleABI(cfg *config.Config, abi int) int {
 	return supported
 }
 
-func toLandlockConfig(version int) (landlock.Config, error) {
-	switch version {
-	case 1:
-		return landlock.V1, nil
-	case 2:
-		return landlock.V2, nil
-	case 3:
-		return landlock.V3, nil
-	case 4:
-		return landlock.V4, nil
-	case 5:
-		return landlock.V5, nil
-	case 6:
-		return landlock.V6, nil
-	case 7:
-		return landlock.V7, nil
-	default:
+// toLandlockConfig returns the configuration that restricts everything that
+// Landlock ABI version can restrict. It restricts scoped IPC only if scoped is
+// set.
+func toLandlockConfig(version int, scoped bool) (landlock.Config, error) {
+	if version < 1 || version > config.MaxABI {
 		return landlock.Config{}, fmt.Errorf("%w: unsupported ABI version %d", ErrInvalidOption, version)
 	}
+
+	// FS_READ_WRITE_EXEC holds every filesystem right up to MaxABI.
+	fsRights := filterAccess(access.FS_READ_WRITE_EXEC, true, version)
+
+	var netRights landlock.AccessNetSet
+	if version >= 4 {
+		netRights = landlock.AccessNetSet(access.NETWORK_BIND_TCP | access.NETWORK_CONNECT_TCP)
+	}
+
+	var scopes landlock.ScopedSet
+	if scoped && version >= 6 {
+		scopes = syscall.ScopeAbstractUnixSocket | syscall.ScopeSignal
+	}
+
+	cfg, err := landlock.NewConfig(fsRights, netRights, scopes)
+	if err != nil {
+		return landlock.Config{}, err
+	}
+
+	return *cfg, nil
 }
 
 func validateCompatibility(cfg *config.Config, abi int) error {
@@ -122,7 +130,11 @@ func validateCompatibility(cfg *config.Config, abi int) error {
 func (s *Sandboxec) enforce() error {
 	abi := landlockABI(&s.cfg)
 
-	cfg, err := toLandlockConfig(abi)
+	// A sandbox without rules restricts everything its ABI supports, including
+	// scoped IPC.
+	noRules := len(s.cfg.FSRules) == 0 && len(s.cfg.NetRules) == 0
+
+	cfg, err := toLandlockConfig(abi, s.cfg.RestrictScoped || noRules)
 	if err != nil {
 		return err
 	}
@@ -135,58 +147,26 @@ func (s *Sandboxec) enforce() error {
 		return err
 	}
 
-	fsABI := ruleABI(&s.cfg, abi)
-	hasFSRules := len(s.cfg.FSRules) > 0
-	hasNetRules := len(s.cfg.NetRules) > 0
-
-	if !hasFSRules && !hasNetRules && !s.cfg.RestrictScoped {
-		if err := cfg.Restrict(devNullRule(fsABI)); err != nil {
-			return fmt.Errorf("landlock default restrict failed: %w", err)
-		}
-
-		return nil
-	}
-
 	// The filesystem is deny-by-default: without FS rules, deny all of it,
 	// even when only network or scoped restrictions are set. The one
 	// exception is /dev/null, which every sandbox allows.
+	fsABI := ruleABI(&s.cfg, abi)
+
 	rules, err := s.buildFSRules(fsABI)
 	if err != nil {
 		return err
 	}
 
 	rules = append(rules, devNullRule(fsABI))
+	rules = append(rules, s.buildNetRules()...)
 
-	if err := cfg.RestrictPaths(rules...); err != nil {
-		return fmt.Errorf("landlock restrict paths failed: %w", err)
-	}
-
-	// Landlock ABI V1-V3 do not support network rules, so only attempt to apply
-	// them if the configured ABI is V4+.
-	if abi >= 4 {
-		var rules []landlock.Rule
-
-		if hasNetRules {
-			for _, rule := range s.cfg.NetRules {
-				if rule.Rights&access.NETWORK_BIND_TCP != 0 {
-					rules = append(rules, landlock.BindTCP(rule.Port))
-				}
-
-				if rule.Rights&access.NETWORK_CONNECT_TCP != 0 {
-					rules = append(rules, landlock.ConnectTCP(rule.Port))
-				}
-			}
-		}
-
-		if err := cfg.RestrictNet(rules...); err != nil {
-			return fmt.Errorf("landlock restrict net failed: %w", err)
-		}
-	}
-
-	if s.cfg.RestrictScoped {
-		if err := cfg.RestrictScoped(); err != nil {
-			return fmt.Errorf("landlock scoped restrict failed: %w", err)
-		}
+	// Enforce a single ruleset. Every ruleset denies Landlock's refer right,
+	// which covers moving and linking files between directories, unless one of
+	// its own rules grants it. That includes a ruleset that handles only
+	// network or scoped access, so a second ruleset would block the moves and
+	// links that the FS rules allow.
+	if err := cfg.Restrict(rules...); err != nil {
+		return fmt.Errorf("landlock restrict failed: %w", err)
 	}
 
 	return nil
@@ -242,6 +222,22 @@ func (s *Sandboxec) buildFSRules(abi int) ([]landlock.Rule, error) {
 	}
 
 	return rules, nil
+}
+
+func (s *Sandboxec) buildNetRules() []landlock.Rule {
+	var rules []landlock.Rule
+
+	for _, rule := range s.cfg.NetRules {
+		if rule.Rights&access.NETWORK_BIND_TCP != 0 {
+			rules = append(rules, landlock.BindTCP(rule.Port))
+		}
+
+		if rule.Rights&access.NETWORK_CONNECT_TCP != 0 {
+			rules = append(rules, landlock.ConnectTCP(rule.Port))
+		}
+	}
+
+	return rules
 }
 
 // filterAccess returns the Landlock rights that rights grant on a file, or on
