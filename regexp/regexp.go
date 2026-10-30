@@ -408,7 +408,7 @@ func (r *Regexp) findStringSubmatch(s string) []string {
 		return nil
 	}
 
-	return groupsToStrings(s, m.Groups())
+	return groupsToStrings(m.Groups())
 }
 
 func (r *Regexp) findStringSubmatchIndex(s string) []int {
@@ -457,7 +457,7 @@ func (r *Regexp) findAllStringSubmatch(s string, n int) [][]string {
 			break
 		}
 
-		matches = append(matches, groupsToStrings(s, m.Groups()))
+		matches = append(matches, groupsToStrings(m.Groups()))
 		m, err = r.pcre.FindNextMatch(m)
 	}
 
@@ -479,14 +479,10 @@ func (r *Regexp) findAllStringSubmatchIndex(s string, n int) [][]int {
 	return matches
 }
 
-func groupsToStrings(s string, groups []regexp2.Group) []string {
+func groupsToStrings(groups []regexp2.Group) []string {
 	out := make([]string, len(groups))
-	runes := []rune(s)
-	for i, g := range groups {
-		if g.Index < 0 || g.Length < 0 {
-			continue
-		}
-		out[i] = string(runes[g.Index : g.Index+g.Length])
+	for i := range groups {
+		out[i] = groups[i].String()
 	}
 	return out
 }
