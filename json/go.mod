@@ -4,7 +4,7 @@ go 1.25
 
 require (
 	github.com/bytedance/sonic v1.15.5
-	github.com/goccy/go-json v0.11.2
+	github.com/goccy/go-json v0.12.0
 )
 
 require (
