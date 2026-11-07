@@ -3,6 +3,8 @@ version: 2
 updates:
   - package-ecosystem: "gomod"
     directories: ["**/*"]
+    # go.mod files under testdata are test fixtures, not modules.
+    exclude-paths: ["**/testdata/**"]
     schedule:
       interval: "weekly"
     target-branch: "master"
