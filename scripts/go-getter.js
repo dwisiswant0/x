@@ -23,7 +23,12 @@ async function listGoModFiles(startDir) {
   async function walk(dir) {
     const entries = await fsp.readdir(dir, { withFileTypes: true });
     for (const entry of entries) {
-      if (entry.name === ".git" || entry.name === "node_modules") {
+      // A go.mod under testdata is a test fixture, not a module.
+      if (
+        entry.name === ".git" ||
+        entry.name === "node_modules" ||
+        entry.name === "testdata"
+      ) {
         continue;
       }
       const fullPath = path.join(dir, entry.name);
