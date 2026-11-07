@@ -2,7 +2,8 @@
 
 set -euo pipefail
 
-# copy the root LICENSE into every directory that contains a go.mod file.
+# copy the root LICENSE into every directory that contains a go.mod file,
+# skipping testdata, where a go.mod is a test fixture rather than a module.
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 license_file="${repo_root}/LICENSE"
 
@@ -11,7 +12,7 @@ if [[ ! -f "${license_file}" ]]; then
 	exit 1
 fi
 
-find "${repo_root}" -name go.mod -print0 | while IFS= read -r -d '' modfile; do
+find "${repo_root}" -name go.mod -not -path '*/testdata/*' -print0 | while IFS= read -r -d '' modfile; do
 	mod_dir="$(dirname "${modfile}")"
 	# avoid copying the root LICENSE to itself if the repo root has a go.mod.
 	if [[ "${mod_dir}" == "${repo_root}" ]]; then

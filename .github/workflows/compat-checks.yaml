@@ -25,7 +25,7 @@ jobs:
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.sha }}
         run: |
-          modules=$(git diff --name-only "$BASE" "$HEAD" -- '*go.mod' '*go.sum' | xargs -r -n1 dirname | sort -u | xargs)
+          modules=$(git diff --name-only "$BASE" "$HEAD" -- '*go.mod' '*go.sum' ':!*/testdata/*' | xargs -r -n1 dirname | sort -u | xargs)
           echo "modules=$modules" >> "$GITHUB_OUTPUT"
           [ -n "$modules" ] || echo "No modules changed"
       - name: Run go vet on changed modules

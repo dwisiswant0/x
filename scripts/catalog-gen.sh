@@ -9,8 +9,9 @@ if [[ ! -f "${readme}" ]]; then
   exit 1
 fi
 
-# Collect module directories (relative to repo root).
-mapfile -t module_dirs < <(find "${repo_root}" -name go.mod -type f -print0 | xargs -0 -n1 dirname | sed "s|^${repo_root}/||" | sort)
+# Collect module directories (relative to repo root). A go.mod under testdata
+# is a test fixture, not a module.
+mapfile -t module_dirs < <(find "${repo_root}" -name go.mod -type f -not -path '*/testdata/*' -print0 | xargs -0 -n1 dirname | sed "s|^${repo_root}/||" | sort)
 
 if [[ ${#module_dirs[@]} -eq 0 ]]; then
   echo "No modules found (go.mod)." >&2
