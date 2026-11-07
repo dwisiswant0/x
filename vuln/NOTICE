@@ -1,0 +1,9 @@
+vuln
+Copyright 2026 Dwi Siswanto
+
+This module contains code copied from golang.org/x/vuln v1.9.0, in
+internal/govulncheck, internal/osv, and internal/semver.
+
+The upstream code is licensed under the BSD 3-Clause License, which is in the
+LICENSE file of each of those directories. PATENTS holds the Go project's
+additional patent grant for that code.
