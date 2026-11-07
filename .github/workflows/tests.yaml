@@ -52,15 +52,29 @@ jobs:
           echo "Comparing $BASE..$HEAD"
           git diff --name-only "$BASE" "$HEAD" || true
 
-          # Find all directories with go.mod
+          # A changed file belongs only to the innermost module containing
+          # it, so a change under exp/file selects exp/file but not exp.
+          mapfile -t all_modules < <(list_modules)
+          declare -A changed=()
+          while IFS= read -r file; do
+            owner=""
+            for dir in "${all_modules[@]}"; do
+              if [[ "$file" == "$dir"/* && ${#dir} -gt ${#owner} ]]; then
+                owner=$dir
+              fi
+            done
+            if [ -n "$owner" ]; then
+              changed[$owner]=1
+            fi
+          done < <(git diff --name-only "$BASE" "$HEAD")
+
           modules=()
-          while IFS= read -r dir; do
-            # Check if any file in this module directory changed
-            if git diff --name-only "$BASE" "$HEAD" | grep -qE "^${dir}/"; then
+          for dir in "${all_modules[@]}"; do
+            if [ -n "${changed[$dir]:-}" ]; then
               echo "Module changed: $dir"
               modules+=("$dir")
             fi
-          done < <(list_modules)
+          done
 
           if [ ${#modules[@]} -eq 0 ]; then
             echo "modules=[]" >> "$GITHUB_OUTPUT"
