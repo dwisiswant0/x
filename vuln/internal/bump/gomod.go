@@ -95,7 +95,8 @@ func runGo(ctx context.Context, w io.Writer, args ...string) error {
 	// The arguments are flags that govulnbump sets itself (-t and -tags=,
 	// which carries the user's list in the same argument), module@version
 	// pairs from the plan, whose versions are valid semver, and directory
-	// patterns, which start with "." or "/". So none becomes another flag.
+	// patterns, which start with "." or are absolute paths. So none becomes
+	// another flag.
 	cmd := exec.CommandContext(ctx, "go", args...) //nolint:gosec // see above
 	cmd.Stdout = w
 	cmd.Stderr = w

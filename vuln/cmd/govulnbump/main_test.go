@@ -57,14 +57,18 @@ func TestExitCode(t *testing.T) {
 
 func TestChdir(t *testing.T) {
 	t.Setenv("GOWORK", "off")
+	// Cleanups run last-in, first-out, so calling t.TempDir before t.Chdir
+	// restores the working directory before dir is removed. Windows can't
+	// remove a process's working directory.
+	dir := t.TempDir()
 	t.Chdir(".") // restore the working directory that -C changes
 
-	if code, _ := runCommand(t, "-C", filepath.Join(t.TempDir(), "missing")); code != exitError {
+	if code, _ := runCommand(t, "-C", filepath.Join(dir, "missing")); code != exitError {
 		t.Errorf("-C to a missing directory: exit %d, want %d", code, exitError)
 	}
 	// The test runs inside this module, so "no go.mod" shows that -C
 	// changed the directory before the go command ran.
-	code, stderr := runCommand(t, "-n", "-C", t.TempDir())
+	code, stderr := runCommand(t, "-n", "-C", dir)
 	if code != exitError || !strings.Contains(stderr, "no go.mod") {
 		t.Errorf("-C to a directory without go.mod: exit %d, want %d\nstderr:\n%s", code, exitError, stderr)
 	}

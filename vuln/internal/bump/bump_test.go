@@ -23,7 +23,9 @@ import (
 func TestOptions(t *testing.T) {
 	t.Parallel()
 
-	dirs := []string{"./cmd/app", "/abs/dir"}
+	// A literal such as "/abs/dir" has no volume name, so it isn't absolute
+	// on Windows.
+	dirs := []string{"./cmd/app", t.TempDir()}
 
 	for _, tc := range []struct {
 		opts         Options
@@ -412,8 +414,16 @@ func goCommand(t *testing.T, args ...string) {
 	}
 }
 
+// fileURL returns the file URL of the absolute path. A Windows path gets a
+// slash before its drive letter, as in file:///C:/dir; in file://C:/dir,
+// C: is the host, which the go command rejects.
 func fileURL(path string) string {
-	return "file://" + filepath.ToSlash(path)
+	path = filepath.ToSlash(path)
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+
+	return "file://" + path
 }
 
 func readFile(t *testing.T, name string) string {
