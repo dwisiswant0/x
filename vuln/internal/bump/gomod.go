@@ -159,17 +159,28 @@ func selectVersions(ctx context.Context, gomod string, ups []Upgrade, opts *Opti
 		return fmt.Errorf("selecting versions for %s: %w", strings.Join(planned, " "), err)
 	}
 
-	for i, u := range ups {
+	if err := raiseTo(ups, reqs); err != nil {
+		return fmt.Errorf("selecting versions: %w", err)
+	}
+
+	return nil
+}
+
+// raiseTo sets the To of each module upgrade in ups to the version of its
+// requirement in reqs, which go get left at the selected version.
+func raiseTo(ups []Upgrade, reqs map[string]string) error {
+	for i := range ups {
+		u := &ups[i]
 		if u.Module == osv.GoStdModulePath {
 			continue
 		}
 
 		v := reqs[u.Module]
 		if v == "" {
-			return fmt.Errorf("selecting versions: %w on %s", errDropped, u.Module)
+			return fmt.Errorf("%w on %s", errDropped, u.Module)
 		}
 
-		ups[i].To = v
+		u.To = v
 	}
 
 	return nil

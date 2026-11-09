@@ -330,6 +330,27 @@ func TestGoGetFails(t *testing.T) {
 	}
 }
 
+// TestGoGetFailsAfterSelection checks a go get failure after version
+// selection, whose go get writes only a copy of go.mod, succeeds.
+func TestGoGetFailsAfterSelection(t *testing.T) {
+	db := setup(t, "vuln.Bad()", "")
+
+	if os.Geteuid() == 0 {
+		t.Skip("root can write a read-only go.mod")
+	}
+
+	if err := os.Chmod("go.mod", 0o400); err != nil {
+		t.Fatal(err)
+	}
+	// Windows can't remove a read-only file.
+	t.Cleanup(func() { _ = os.Chmod("go.mod", 0o600) })
+
+	res, errOut, err := runBump(t, Options{DB: db})
+	if err == nil || !strings.HasPrefix(err.Error(), "go get example.com/lib@v1.1.0 ./...: ") || res != nil {
+		t.Fatalf("Run = %+v, %v; want nil and a go get failure\nstderr:\n%s", res, err, errOut)
+	}
+}
+
 // TestFailureAfterUpgrade checks that when a later round fails, Run still
 // returns the upgrades that earlier rounds made.
 func TestFailureAfterUpgrade(t *testing.T) {

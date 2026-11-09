@@ -90,6 +90,23 @@ func TestSwitchesToolchains(t *testing.T) {
 	}
 }
 
+func TestRaiseTo(t *testing.T) {
+	t.Parallel()
+
+	ups := []Upgrade{{std, "v1.26.0", "v1.26.2", nil}, {lib, "v1.0.0", "v1.1.0", nil}}
+	if err := raiseTo(ups, map[string]string{lib: "v1.2.0"}); err != nil {
+		t.Fatal(err)
+	}
+	// The standard library has no requirement, so its To stays.
+	if ups[0].To != "v1.26.2" || ups[1].To != "v1.2.0" {
+		t.Errorf("raiseTo set To to %s and %s, want v1.26.2 and v1.2.0", ups[0].To, ups[1].To)
+	}
+
+	if err := raiseTo(ups, map[string]string{}); !errors.Is(err, errDropped) {
+		t.Errorf("raiseTo without a requirement on %s = %v, want %v", lib, err, errDropped)
+	}
+}
+
 func TestDecodeScan(t *testing.T) {
 	t.Parallel()
 
