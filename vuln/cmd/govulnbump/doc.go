@@ -50,7 +50,9 @@ The flags are:
 		https://vuln.go.dev.
 	-n
 		Report the upgrades and the go get command that makes them,
-		without running it.
+		without running it. To choose the versions, govulnbump still
+		runs go get on a temporary copy of go.mod, so -n can download
+		modules.
 	-scan level
 		Scan at level symbol, package, or module, as govulncheck does.
 		The default, symbol, upgrades only modules whose vulnerable
@@ -75,9 +77,10 @@ the Go release that fixes them.
 # Choosing versions
 
 For each vulnerable module, govulnbump picks the lowest version that its
-advisories list as fixed and that none of them affects. Only advisories that
-the scan reports at the selected level count. If the new version has a
-different vulnerability, the next scan finds it.
+advisories list as fixed and that none of them affects. If another upgrade
+requires a newer version of the module, govulnbump picks that version
+instead. Only advisories that the scan reports at the selected level count.
+If the new version has a different vulnerability, the next scan finds it.
 
 govulnbump never lowers a version. It reports, without upgrading:
 
