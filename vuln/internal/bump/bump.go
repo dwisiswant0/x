@@ -180,6 +180,10 @@ func run(ctx context.Context, opts *Options, gomod string, stderr io.Writer) (*R
 			return acc.result(initial, before), nil
 		}
 
+		if err := selectVersions(ctx, gomod, ups, opts, stderr); err != nil {
+			return acc.partial(initial, before), err
+		}
+
 		getArgs := goGetArgs(ups, opts)
 
 		if opts.DryRun {

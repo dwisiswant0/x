@@ -232,14 +232,101 @@ func TestReplacedModule(t *testing.T) {
 	}
 }
 
+// TestUpgradeRaisesAnother checks a round in which one upgrade raises another
+// module above that module's own fix. example.com/dep v0.2.0 fixes
+// GO-0000-0003, but example.com/lib v1.1.0, which fixes GO-0000-0001,
+// requires example.com/dep v1.0.0.
+func TestUpgradeRaisesAnother(t *testing.T) {
+	db := setupModule(t, "require (\n\texample.com/dep v0.1.0\n\texample.com/lib v1.0.0\n)\n",
+		"import (\n\t\"example.com/dep\"\n\t\"example.com/lib/vuln\"\n)\n\nfunc main() {\n\tdep.Check()\n\tvuln.Bad()\n}\n")
+
+	const idC = "GO-0000-0003"
+
+	ups := []Upgrade{{"example.com/dep", "v0.1.0", "v1.0.0", []string{idC}}, upgradeA()}
+	sums := map[string]string{idA: summaryA, idC: "Check in example.com/dep is vulnerable."}
+
+	res, errOut, err := runBump(t, Options{DB: db, DryRun: true})
+	if err != nil {
+		t.Fatalf("DryRun: Run: %v\nstderr:\n%s", err, errOut)
+	}
+
+	wantResult(t, res, &Result{
+		DryRun:    true,
+		Upgrades:  ups,
+		GoGet:     []string{"get", "example.com/dep@v1.0.0", "example.com/lib@v1.1.0", "./..."},
+		Summaries: sums,
+	})
+
+	res, errOut, err = runBump(t, Options{DB: db})
+	if err != nil {
+		t.Fatalf("Run: %v\nstderr:\n%s", err, errOut)
+	}
+
+	wantResult(t, res, &Result{
+		Upgrades:  ups,
+		Changes:   []Change{}, // the upgrades are the only go.mod changes
+		Uncalled:  1,
+		Summaries: sums,
+	})
+	wantRequires(t, "example.com/dep v1.0.0")
+	wantRequires(t, "example.com/lib v1.1.0")
+}
+
+// TestUpgradeRaisesIndirect is like TestUpgradeRaisesAnother, but in a go
+// 1.16 module that requires example.com/dep only indirectly. In such a
+// module, go get drops an indirect requirement whose version it raises.
+func TestUpgradeRaisesIndirect(t *testing.T) {
+	db := setupModule(t, "require example.com/legacy v1.0.0\n",
+		"import \"example.com/legacy\"\n\nfunc main() { legacy.Bad() }\n")
+
+	writeFile(t, "go.mod", strings.Replace(readFile(t, "go.mod"), "go 1.26.0", "go 1.16", 1))
+	wantRequires(t, "example.com/dep v0.1.0 // indirect")
+
+	const idC, idD = "GO-0000-0003", "GO-0000-0004"
+
+	ups := []Upgrade{
+		{"example.com/dep", "v0.1.0", "v1.0.0", []string{idC}},
+		{"example.com/legacy", "v1.0.0", "v1.1.0", []string{idD}},
+	}
+	sums := map[string]string{
+		idC: "Check in example.com/dep is vulnerable.",
+		idD: "Bad in example.com/legacy is vulnerable.",
+	}
+
+	res, errOut, err := runBump(t, Options{DB: db, DryRun: true})
+	if err != nil {
+		t.Fatalf("DryRun: Run: %v\nstderr:\n%s", err, errOut)
+	}
+
+	wantResult(t, res, &Result{
+		DryRun:    true,
+		Upgrades:  ups,
+		GoGet:     []string{"get", "example.com/dep@v1.0.0", "example.com/legacy@v1.1.0", "./..."},
+		Summaries: sums,
+	})
+
+	res, errOut, err = runBump(t, Options{DB: db})
+	if err != nil {
+		t.Fatalf("Run: %v\nstderr:\n%s", err, errOut)
+	}
+
+	wantResult(t, res, &Result{Upgrades: ups, Changes: []Change{}, Summaries: sums})
+	wantRequires(t, "example.com/dep v1.0.0 // indirect")
+	wantRequires(t, "example.com/legacy v1.1.0")
+}
+
 func TestGoGetFails(t *testing.T) {
 	db := setup(t, "vuln.Bad()", "")
 	// The module cache has v1.0.0, which the scan needs, but not v1.1.0.
 	t.Setenv("GOPROXY", "off")
 
+	// go get fails on the copy of go.mod that selects versions, and Run
+	// shows what go get printed.
 	res, errOut, err := runBump(t, Options{DB: db})
-	if err == nil || errors.Is(err, ErrUsage) || !strings.HasPrefix(err.Error(), "go get ") || res != nil {
-		t.Fatalf("Run = %+v, %v; want nil and a go get failure\nstderr:\n%s", res, err, errOut)
+	if err == nil || errors.Is(err, ErrUsage) ||
+		!strings.HasPrefix(err.Error(), "selecting versions for example.com/lib@v1.1.0: go get ") ||
+		!strings.Contains(errOut, "GOPROXY=off") || res != nil {
+		t.Fatalf("Run = %+v, %v; want nil and a go get failure with its output\nstderr:\n%s", res, err, errOut)
 	}
 }
 
@@ -253,7 +340,7 @@ func TestFailureAfterUpgrade(t *testing.T) {
 	t.Setenv("GOPROXY", "off")
 
 	res, errOut, err := runBump(t, Options{DB: db, Level: govulncheck.ScanLevelPackage})
-	if err == nil || !strings.HasPrefix(err.Error(), "go get example.com/lib@v1.2.0 ") {
+	if err == nil || !strings.HasPrefix(err.Error(), "selecting versions for example.com/lib@v1.2.0: go get ") {
 		t.Fatalf("Run error = %v, want a go get failure in round 2\nstderr:\n%s", err, errOut)
 	}
 
@@ -294,6 +381,15 @@ func TestNoModule(t *testing.T) {
 func setup(t *testing.T, body, gomodExtra string) (db string) {
 	t.Helper()
 
+	return setupModule(t, "require example.com/lib v1.0.0\n"+gomodExtra,
+		"import \"example.com/lib/vuln\"\n\nfunc main() { "+body+" }\n")
+}
+
+// setupModule is like setup, but go.mod has reqs after its go line, and
+// main.go has src after its package clause.
+func setupModule(t *testing.T, reqs, src string) (db string) {
+	t.Helper()
+
 	if testing.Short() {
 		t.Skip("scans a module")
 	}
@@ -316,10 +412,8 @@ func setup(t *testing.T, body, gomodExtra string) (db string) {
 	t.Setenv("GOFLAGS", "-modcacherw")
 
 	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "go.mod"),
-		"module example.com/main\n\ngo 1.26.0\n\nrequire example.com/lib v1.0.0\n"+gomodExtra)
-	writeFile(t, filepath.Join(dir, "main.go"),
-		"package main\n\nimport \"example.com/lib/vuln\"\n\nfunc main() { "+body+" }\n")
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/main\n\ngo 1.26.0\n\n"+reqs)
+	writeFile(t, filepath.Join(dir, "main.go"), "package main\n\n"+src)
 	t.Chdir(dir)
 	goCommand(t, "mod", "tidy")
 

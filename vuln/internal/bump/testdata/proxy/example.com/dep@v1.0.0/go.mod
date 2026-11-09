@@ -1,3 +1,3 @@
 module example.com/dep
 
-go 1.21
+go 1.16
