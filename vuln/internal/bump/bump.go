@@ -158,6 +158,9 @@ func run(ctx context.Context, opts *Options, gomod string, stderr io.Writer) (*R
 		return nil, err
 	}
 
+	restore := cacheDB()
+	defer restore()
+
 	acc := newAccumulator(opts)
 
 	progressf(stderr, "scanning %s (%s level)", scanTarget(opts), opts.Level)

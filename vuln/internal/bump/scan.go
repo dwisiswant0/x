@@ -7,7 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
+	"net/http"
 
+	"github.com/sandrolain/httpcache"
 	"golang.org/x/mod/semver"
 	"golang.org/x/vuln/scan"
 
@@ -61,6 +64,30 @@ func scanModule(ctx context.Context, opts *Options, stderr io.Writer) (*scanResu
 	}
 
 	return decodeScan(&out)
+}
+
+// cacheDB puts an in-memory HTTP cache in front of the scanner's
+// vulnerability database client, so that a rescan reuses the responses of
+// earlier scans for as long as their HTTP caching headers allow. The returned
+// function removes the cache.
+//
+// The database client always uses http.DefaultClient, because scan.Command
+// takes no HTTP client. cacheDB changes it for the whole process, so two runs
+// must not overlap.
+func cacheDB() (restore func()) {
+	prev := http.DefaultClient.Transport
+	http.DefaultClient.Transport = &httpcache.Transport{Transport: prev, Cache: httpcache.NewMemoryCache()}
+
+	return func() { http.DefaultClient.Transport = prev }
+}
+
+func init() {
+	// httpcache logs through slog.Default, which writes to the process's
+	// stderr instead of the writer that Run is given. A database server can
+	// make it warn on every response, for example by sending the common
+	// "Cache-Control: no-cache, no-store, must-revalidate". SetLogger isn't
+	// synchronized, so it runs once, before any request.
+	httpcache.SetLogger(slog.New(slog.DiscardHandler))
 }
 
 // decodeScan decodes a stream of govulncheck JSON messages. The stream must

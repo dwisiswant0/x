@@ -2,16 +2,21 @@ package bump
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"golang.org/x/mod/module"
@@ -136,6 +141,36 @@ func TestDryRun(t *testing.T) {
 
 	if after := readFile(t, "go.mod"); after != before {
 		t.Errorf("DryRun changed go.mod:\n%s", after)
+	}
+}
+
+func TestRescanReusesDBResponses(t *testing.T) {
+	// Resolve testdata before setup changes the working directory.
+	dir, err := filepath.Abs(filepath.Join("testdata", "vulndb-v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	setup(t, "vuln.Bad()", "")
+	db, requests := serveDB(t, dir)
+
+	_, errOut, err := runBump(t, Options{DB: db})
+	if err != nil {
+		t.Fatalf("Run: %v\nstderr:\n%s", err, errOut)
+	}
+
+	if !strings.Contains(errOut, "govulnbump: rescanning\n") {
+		t.Fatalf("Run did not rescan:\n%s", errOut)
+	}
+
+	for req, n := range requests() {
+		if n > 1 {
+			t.Errorf("%s: %d requests, want 1", req, n)
+		}
+	}
+	// A later run must not get this run's cached responses.
+	if tr := http.DefaultClient.Transport; tr != nil {
+		t.Errorf("Run left http.DefaultClient.Transport set to %T", tr)
 	}
 }
 
@@ -488,6 +523,52 @@ func buildProxy(t *testing.T, src, dst string) {
 
 	for path, vs := range versions {
 		writeFile(t, filepath.Join(dst, filepath.FromSlash(path), "@v", "list"), strings.Join(vs, "\n")+"\n")
+	}
+}
+
+// serveDB serves the vulnerability database in dir over HTTP as vuln.go.dev
+// does: gzipped, and fresh for an hour. requests counts the requests that the
+// server has had, by method and path.
+func serveDB(t *testing.T, dir string) (url string, requests func() map[string]int) {
+	t.Helper()
+
+	var (
+		mu     sync.Mutex
+		counts = map[string]int{}
+	)
+
+	files := os.DirFS(dir)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		counts[r.Method+" "+r.URL.Path]++
+		mu.Unlock()
+
+		// dir holds the files uncompressed, as file URLs read them.
+		data, err := fs.ReadFile(files, strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/"), ".gz"))
+		if err != nil {
+			http.NotFound(w, r)
+
+			return
+		}
+
+		w.Header().Set("Cache-Control", "public, max-age=3600")
+
+		zw := gzip.NewWriter(w)
+		if _, err := zw.Write(data); err != nil {
+			t.Error(err)
+		}
+
+		if err := zw.Close(); err != nil {
+			t.Error(err)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	return srv.URL, func() map[string]int {
+		mu.Lock()
+		defer mu.Unlock()
+
+		return maps.Clone(counts)
 	}
 }
 
