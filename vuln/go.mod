@@ -3,6 +3,7 @@ module go.dw1.io/x/vuln
 go 1.26.0
 
 require (
+	github.com/sandrolain/httpcache v1.4.3
 	golang.org/x/mod v0.42.0
 	golang.org/x/vuln v1.9.0
 )

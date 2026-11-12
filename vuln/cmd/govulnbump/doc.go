@@ -47,7 +47,8 @@ The flags are:
 		Change to dir before running.
 	-db url
 		Use the vulnerability database at url. The default is
-		https://vuln.go.dev.
+		https://vuln.go.dev. Rescans reuse its responses for as long
+		as their HTTP caching headers allow.
 	-n
 		Report the upgrades and the go get command that makes them,
 		without running it. To choose the versions, govulnbump still
