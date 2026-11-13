@@ -11,6 +11,7 @@ A collection of Go hacks maintained by [**@dwisiswant0**](https://github.com/dwi
 	- [exp/sandboxec](exp/sandboxec): wraps os/exec with process-wide sandbox policy enforcement. [[docs](https://go.dw1.io/x/exp/sandboxec?godoc=1)]
 - [hash/wyhash](hash/wyhash): a Go implementation of the wyhash non-cryptographic. [[docs](https://go.dw1.io/x/hash/wyhash?godoc=1)]
 - [json](json): fast JSON encoding and decoding functionality. [[docs](https://go.dw1.io/x/json?godoc=1)]
+- [net/http/cache](net/http/cache): an RFC 9111 HTTP cache as an `http.RoundTripper`. [[docs](https://go.dw1.io/x/net/http/cache?godoc=1)]
 - [regexp](regexp): selects the fastest regex engine available for a pattern. [[docs](https://go.dw1.io/x/regexp?godoc=1)]
 - [vuln](vuln) [[docs](https://go.dw1.io/x/vuln?godoc=1)]
 ## Install
