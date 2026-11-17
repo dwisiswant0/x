@@ -35,6 +35,8 @@ type Transport struct {
 	// a concurrent invalidation. Reads don't lock.
 	seed    maphash.Seed
 	stripes [stripeCount]stripe
+
+	counts counters
 }
 
 // stripe guards the writes to the keys that hash to it, and records their
@@ -114,6 +116,10 @@ func New(next http.RoundTripper, opts ...Option) (*Transport, error) {
 		entries:     entries,
 		seed:        maphash.MakeSeed(),
 		stripes:     [stripeCount]stripe{},
+		counts: counters{
+			hits: atomic.Uint64{}, revalidations: atomic.Uint64{}, misses: atomic.Uint64{},
+			bypasses: atomic.Uint64{}, stores: atomic.Uint64{}, drops: atomic.Uint64{},
+		},
 	}, nil
 }
 
@@ -156,6 +162,8 @@ func (t *Transport) roundTripCached(req *http.Request) (*http.Response, error) {
 	dirs := parseDirectives(req.Header["Cache-Control"])
 
 	if !cacheable || bypass(req) {
+		t.counts.bypasses.Add(1)
+
 		// Such a request can't use a stored response, so only-if-cached
 		// leaves only a 504 (RFC 9111 §5.2.1.7).
 		if dirs.onlyIfCached {
@@ -177,6 +185,7 @@ func (t *Transport) roundTripCached(req *http.Request) (*http.Response, error) {
 	now := time.Now()
 	if stored != nil {
 		if age := stored.currentAge(now); t.reusable(stored, dirs, age) {
+			t.counts.hits.Add(1)
 			closeBody(req)
 
 			return stored.hit(req, age), nil
@@ -184,12 +193,20 @@ func (t *Transport) roundTripCached(req *http.Request) (*http.Response, error) {
 	}
 
 	if dirs.onlyIfCached {
+		t.counts.misses.Add(1)
 		closeBody(req)
 
 		return gatewayTimeout(req, now), nil
 	}
 
-	return t.fetch(req, key, dirs, stored)
+	res, revalidated, err := t.fetch(req, key, dirs, stored)
+	if revalidated {
+		t.counts.revalidations.Add(1)
+	} else {
+		t.counts.misses.Add(1)
+	}
+
+	return res, err
 }
 
 // forward sends req to the next RoundTripper without consulting or updating
@@ -250,8 +267,11 @@ func (t *Transport) staleAllowed(stored *variant, dirs directives, age time.Dura
 }
 
 // fetch forwards a GET or HEAD request that the cache can't answer, as a
-// conditional request when the stored response can be validated.
-func (t *Transport) fetch(req *http.Request, key string, dirs directives, stored *variant) (*http.Response, error) {
+// conditional request when the stored response can be validated. It reports
+// whether a 304 response let it answer with the stored response.
+func (t *Transport) fetch(
+	req *http.Request, key string, dirs directives, stored *variant,
+) (*http.Response, bool, error) {
 	gen := t.stripe(key).gen.Load()
 
 	// A client's own preconditions are forwarded unchanged rather than merged
@@ -260,12 +280,12 @@ func (t *Transport) fetch(req *http.Request, key string, dirs directives, stored
 	if stored != nil && stored.hasValidator() && !dirs.noStore && !hasConditional(req) {
 		trip, err := t.send(withValidators(req, stored))
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 
 		trip.res.Request = req
 		if trip.res.StatusCode != http.StatusNotModified {
-			return t.handle(req, key, gen, trip), nil
+			return t.handle(req, key, gen, trip), false, nil
 		}
 
 		_ = trip.res.Body.Close()
@@ -275,21 +295,21 @@ func (t *Transport) fetch(req *http.Request, key string, dirs directives, stored
 		// unconditional request, so the request is sent again without
 		// validators.
 		if updated := t.freshen(req, key, gen, trip, stored); updated != nil {
-			return updated.response(req, updated.header.Clone()), nil
+			return updated.response(req, updated.header.Clone()), true, nil
 		}
 	}
 
 	trip, err := t.send(req)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	if dirs.noStore {
 		// §5.2.1.5: nothing from this exchange may be stored.
-		return trip.res, nil
+		return trip.res, false, nil
 	}
 
-	return t.handle(req, key, gen, trip), nil
+	return t.handle(req, key, gen, trip), false, nil
 }
 
 // handle applies a response from the origin to the stored responses and

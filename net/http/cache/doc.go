@@ -150,6 +150,9 @@
 // it ends. Those bytes count toward that limit only once the response is
 // stored.
 //
+// [Transport.Stats] counts the target URIs evicted and the responses dropped,
+// which shows whether the limits are too small for a workload.
+//
 // # Performance
 //
 // A hit takes no lock, except to recheck a lookup that raced the removal of

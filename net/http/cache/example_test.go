@@ -197,3 +197,45 @@ func ExampleTransport_Save() {
 	// full responses: 1
 	// 304 responses: 1
 }
+
+func ExampleTransport_Stats() {
+	origin := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Cache-Control", "max-age=60")
+		_, _ = io.WriteString(writer, "hello")
+	}))
+	defer origin.Close()
+
+	transport, err := cache.New(nil)
+	if err != nil {
+		fmt.Println(err)
+
+		return
+	}
+
+	for _, path := range []string{"/a", "/a", "/b", "/a"} {
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, origin.URL+path, nil)
+		if err != nil {
+			fmt.Println(err)
+
+			return
+		}
+
+		res, err := transport.RoundTrip(req)
+		if err != nil {
+			fmt.Println(err)
+
+			return
+		}
+
+		_, _ = io.Copy(io.Discard, res.Body)
+		_ = res.Body.Close()
+	}
+
+	stats := transport.Stats()
+	requests := stats.Hits + stats.Revalidations + stats.Misses + stats.Bypasses
+	fmt.Printf("answered %d of %d requests from the cache\n", stats.Hits+stats.Revalidations, requests)
+	fmt.Println("stored responses:", stats.Stores)
+	// Output:
+	// answered 2 of 4 requests from the cache
+	// stored responses: 2
+}

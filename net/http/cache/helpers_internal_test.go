@@ -7,6 +7,7 @@ import (
 	"iter"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -307,3 +308,16 @@ func wantHeader(tb testing.TB, res reply, name, want string) {
 }
 
 var errOffline = errors.New("origin offline")
+
+// sizedByAccept answers with a body of 990 bytes for Accept big, which with
+// its header is too large for a cache with WithMaxBytes(1000), and of 10
+// bytes otherwise. Its responses vary on Accept and can be validated.
+func sizedByAccept(writer http.ResponseWriter, req *http.Request) {
+	size := 10
+	if req.Header.Get(hdrAccept) == "big" {
+		size = 990
+	}
+
+	respond(http.StatusOK, strings.Repeat("x", size),
+		hdrCacheControl, ccMaxAge60, hdrETag, etagA, "Vary", hdrAccept)(writer, req)
+}

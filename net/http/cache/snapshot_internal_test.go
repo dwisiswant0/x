@@ -619,6 +619,26 @@ func TestSnapshotDetectsSkippedChunk(t *testing.T) {
 	}
 }
 
+func TestSnapshotLoadSkipsTooLarge(t *testing.T) {
+	t.Parallel()
+
+	cache, srv := newTestCache(t, sizedByAccept, WithMaxBytes(1000), WithMaxVariants(1))
+	get(t, cache, testURL, hdrAccept, "small")
+
+	// The saved response is newer, but too large for this cache, so loading
+	// it leaves the one stored for Accept small alone.
+	saved, _ := newTestCache(t, sizedByAccept)
+	get(t, saved, testURL, hdrAccept, "big")
+
+	err := cache.Load(bytes.NewReader(snapshotOf(t, saved)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	get(t, cache, testURL, hdrAccept, "small")
+	wantHits(t, srv, 1)
+}
+
 func TestSnapshotLoadKeepsStoredResponses(t *testing.T) {
 	t.Parallel()
 

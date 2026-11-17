@@ -141,7 +141,12 @@ func (t *Transport) restore(key string, responses []snapshotResponse) {
 			continue
 		}
 
-		variants = withVariant(variants, restored, t.limits)
+		var dropped int
+
+		variants, dropped = withVariant(variants, restored, t.limits)
+		t.counts.stores.Add(1)
+		t.counts.addDrops(dropped)
+
 		added = true
 	}
 
@@ -151,12 +156,12 @@ func (t *Transport) restore(key string, responses []snapshotResponse) {
 }
 
 // loadable reports whether t can store a response from a snapshot: one that
-// RFC 9111 §3 lets it store, within its body limit, that can be validated
+// RFC 9111 §3 lets it store, within its size limits, that can be validated
 // before use. A shared cache doesn't load a body that a private cache
 // decoded, which would be transformed content (RFC 9110 §7.7).
 func (t *Transport) loadable(restored *variant) bool {
 	return (!t.shared || !restored.decoded) && int64(len(restored.body)) <= t.maxBodySize &&
-		restored.hasValidator() && storable(restored, t.shared)
+		restored.size() <= t.maxBytes && restored.hasValidator() && storable(restored, t.shared)
 }
 
 // snapshotResponses returns the responses of ent that Save writes, and

@@ -367,8 +367,15 @@ func (t *Transport) store(req *http.Request, key string, gen uint64, trip exchan
 	}
 }
 
-// put stores added unless key may have been invalidated since gen was read.
+// put stores added unless it is larger than WithMaxBytes, or key may have been
+// invalidated since gen was read.
 func (t *Transport) put(key string, gen uint64, added *variant) {
+	// fitBytes would remove a response this large, but only after withVariant
+	// had let it take the place of a stored one.
+	if added.size() > t.maxBytes {
+		return
+	}
+
 	guard := t.stripe(key)
 	guard.mu.Lock()
 	defer guard.mu.Unlock()
@@ -382,7 +389,10 @@ func (t *Transport) put(key string, gen uint64, added *variant) {
 		old = stored.variants
 	}
 
-	t.set(key, withVariant(old, added, t.limits))
+	variants, dropped := withVariant(old, added, t.limits)
+	t.counts.stores.Add(1)
+	t.counts.addDrops(dropped)
+	t.set(key, variants)
 }
 
 // freshen applies a 304 response to req to the stored responses that it
@@ -546,9 +556,13 @@ func (t *Transport) invalidate(key string) {
 }
 
 // set stores variants as key's entry, without the ones that don't fit in
-// WithMaxBytes together (see fitBytes). The caller holds key's stripe lock.
+// WithMaxBytes together (see fitBytes), which it counts as dropped: put and
+// loadable keep out a response too large to store, so each one was stored.
+// The caller holds key's stripe lock.
 func (t *Transport) set(key string, variants []*variant) {
+	given := len(variants)
 	variants = fitBytes(variants, t.maxBytes)
+	t.counts.addDrops(given - len(variants))
 
 	// Set fails only if the cache can't evict an entry while full, and then
 	// leaves key's old entry in place. That entry might hold a response that
