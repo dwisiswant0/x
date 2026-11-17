@@ -39,7 +39,7 @@ type snapshotVaryField struct {
 	Present bool
 }
 
-// Save writes the responses that t has stored to w, as a snapshot that
+// Save writes t's stored responses to w, as a snapshot that
 // [Transport.Load] can read back. It writes only responses that can be
 // validated, including those that t must validate before their next use,
 // such as responses that Load added and no request has used yet. It writes

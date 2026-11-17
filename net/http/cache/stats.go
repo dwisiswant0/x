@@ -6,9 +6,10 @@ import (
 	"go.dw1.io/fastcache" //nolint:depguard // depguard has no allowlist without a config
 )
 
-// Stats holds counts of what a [Transport] has done since [New] created it.
-// They show how often the cache answers requests, and whether its limits are
-// too small for a workload.
+// Stats holds counts of what a [Transport] has done since [New] created it,
+// together with the Transports that share its stored responses through
+// [Transport.WithNext]. They show how often the cache answers requests, and
+// whether its limits are too small for a workload.
 //
 // Each GET and HEAD request counts in exactly one of Hits, Revalidations,
 // Misses, and Bypasses. Requests with other methods aren't counted.
@@ -59,9 +60,9 @@ func (c *counters) addDrops(n int) {
 	c.drops.Add(uint64(n)) //nolint:gosec // n counts responses, so it isn't negative
 }
 
-// Stats returns what t has counted so far. It reads each count separately,
-// so while requests are in flight, the counts may not all describe the same
-// moment.
+// Stats returns what t, and the Transports that share its stored responses,
+// have counted so far. It reads each count separately, so while requests are
+// in flight, the counts may not all describe the same moment.
 func (t *Transport) Stats() Stats {
 	var evicted fastcache.Stats
 
