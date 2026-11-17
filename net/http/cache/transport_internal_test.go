@@ -840,6 +840,18 @@ func TestMaxBytesVariants(t *testing.T) {
 	}
 }
 
+func TestMaxBytesTooLarge(t *testing.T) {
+	t.Parallel()
+
+	// A response too large to store doesn't take the place of the one stored
+	// for Accept small.
+	cache, srv := newTestCache(t, sizedByAccept, WithMaxBytes(1000), WithMaxVariants(1))
+	get(t, cache, testURL, hdrAccept, "small")
+	get(t, cache, testURL, hdrAccept, "big")
+	get(t, cache, testURL, hdrAccept, "small")
+	wantHits(t, srv, 2)
+}
+
 func TestMaxBytesUpdate(t *testing.T) {
 	t.Parallel()
 

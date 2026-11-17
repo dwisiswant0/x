@@ -367,8 +367,15 @@ func (t *Transport) store(req *http.Request, key string, gen uint64, trip exchan
 	}
 }
 
-// put stores added unless key may have been invalidated since gen was read.
+// put stores added unless it is larger than WithMaxBytes, or key may have been
+// invalidated since gen was read.
 func (t *Transport) put(key string, gen uint64, added *variant) {
+	// fitBytes would remove a response this large, but only after withVariant
+	// had let it take the place of a stored one.
+	if added.size() > t.maxBytes {
+		return
+	}
+
 	guard := t.stripe(key)
 	guard.mu.Lock()
 	defer guard.mu.Unlock()
