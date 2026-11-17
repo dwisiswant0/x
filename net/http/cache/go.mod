@@ -2,7 +2,7 @@ module go.dw1.io/x/net/http/cache
 
 go 1.25.0
 
-require go.dw1.io/fastcache v0.6.0
+require go.dw1.io/fastcache v0.6.1
 
 require (
 	github.com/klauspost/compress v1.20.3 // indirect
