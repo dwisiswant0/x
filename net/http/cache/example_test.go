@@ -239,3 +239,61 @@ func ExampleTransport_Stats() {
 	// answered 2 of 4 requests from the cache
 	// stored responses: 2
 }
+
+func ExampleTransport_WithNext() {
+	var requests atomic.Int32
+
+	origin := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		writer.Header().Set("Cache-Control", "max-age=3600")
+		_, _ = io.WriteString(writer, "hello")
+	}))
+	defer origin.Close()
+
+	upstream, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		fmt.Println("http.DefaultTransport isn't an *http.Transport")
+
+		return
+	}
+
+	// The two clients need transports with different settings, here their
+	// proxies, but request the same URLs.
+	direct := upstream.Clone()
+	direct.Proxy = nil
+
+	transport, err := cache.New(upstream.Clone())
+	if err != nil {
+		fmt.Println(err)
+
+		return
+	}
+
+	clients := []*http.Client{
+		{Transport: transport, CheckRedirect: nil, Jar: nil, Timeout: 0},
+		{Transport: transport.WithNext(direct), CheckRedirect: nil, Jar: nil, Timeout: 0},
+	}
+
+	for _, client := range clients {
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, origin.URL+"/home", nil)
+		if err != nil {
+			fmt.Println(err)
+
+			return
+		}
+
+		res, err := client.Do(req)
+		if err != nil {
+			fmt.Println(err)
+
+			return
+		}
+
+		_, _ = io.Copy(io.Discard, res.Body)
+		_ = res.Body.Close()
+	}
+
+	fmt.Println("origin requests:", requests.Load())
+	// Output:
+	// origin requests: 1
+}

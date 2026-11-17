@@ -18,6 +18,9 @@
 //
 //	transport, err := cache.New(&http.Transport{DisableCompression: true}, cache.WithShared())
 //
+// [Transport.WithNext] lets clients whose transports must differ, for example
+// in their proxy settings, share stored responses.
+//
 // # Conformance
 //
 // The package's tests list each MUST and SHOULD of RFC 9111, and of the parts

@@ -24,7 +24,15 @@ const (
 //
 // A Transport is safe for concurrent use by multiple goroutines.
 type Transport struct {
-	next        http.RoundTripper
+	// The Transports that [Transport.WithNext] returns share storage.
+	*storage
+
+	next http.RoundTripper
+}
+
+// storage holds the stored responses of one or more Transports, with the
+// options that govern them and the state that guards and counts them.
+type storage struct {
 	shared      bool
 	maxBodySize int64
 	maxBytes    int
@@ -108,19 +116,47 @@ func New(next http.RoundTripper, opts ...Option) (*Transport, error) {
 	}
 
 	return &Transport{
-		next:        next,
-		shared:      cfg.shared,
-		maxBodySize: min(cfg.maxBodySize, cfg.maxBytes),
-		maxBytes:    maxBytes,
-		limits:      newVariantLimits(cfg.maxVariants),
-		entries:     entries,
-		seed:        maphash.MakeSeed(),
-		stripes:     [stripeCount]stripe{},
-		counts: counters{
-			hits: atomic.Uint64{}, revalidations: atomic.Uint64{}, misses: atomic.Uint64{},
-			bypasses: atomic.Uint64{}, stores: atomic.Uint64{}, drops: atomic.Uint64{},
+		storage: &storage{
+			shared:      cfg.shared,
+			maxBodySize: min(cfg.maxBodySize, cfg.maxBytes),
+			maxBytes:    maxBytes,
+			limits:      newVariantLimits(cfg.maxVariants),
+			entries:     entries,
+			seed:        maphash.MakeSeed(),
+			stripes:     [stripeCount]stripe{},
+			counts: counters{
+				hits: atomic.Uint64{}, revalidations: atomic.Uint64{}, misses: atomic.Uint64{},
+				bypasses: atomic.Uint64{}, stores: atomic.Uint64{}, drops: atomic.Uint64{},
+			},
 		},
+		next: next,
 	}, nil
+}
+
+// WithNext returns a Transport that sends requests to next instead of t's
+// next RoundTripper, and shares t's stored responses, options, and [Stats].
+// If next is nil, it uses [http.DefaultTransport].
+//
+// It lets clients whose transports must differ, for example in their proxy
+// settings, share a cache. A response stored through either Transport answers
+// requests through the other, and an unsafe request through either
+// invalidates stored responses for both.
+//
+// The cache sees each request before next changes it, so the next
+// RoundTrippers that share stored responses must get the same response to
+// the same request. They must add the same credentials, if any, such as an
+// Authorization field, cookies, or a TLS client certificate. They must reach
+// the same origin servers, through any proxies, and verify them alike, for
+// example with the same TLS root CAs and InsecureSkipVerify setting. They must
+// also handle content codings alike: as [http.Transport]s, they must have the
+// same DisableCompression setting. In a private cache, the clients must also
+// act for the same user.
+func (t *Transport) WithNext(next http.RoundTripper) *Transport {
+	if next == nil {
+		next = http.DefaultTransport
+	}
+
+	return &Transport{storage: t.storage, next: next}
 }
 
 // RoundTrip answers req from the cache when RFC 9111 allows it, and
