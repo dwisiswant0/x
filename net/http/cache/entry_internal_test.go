@@ -173,14 +173,20 @@ func TestWithVariantLimit(t *testing.T) {
 
 	var variants []*variant
 
+	dropped := 0
+
 	for i := range limits.perServer + 2 {
 		v := testVariant(200, time.Duration(i)*time.Second, []string{hdrAccept, strconv.Itoa(i)},
 			hdrDate, formatHTTPDate(testTime().Add(time.Duration(i)*time.Hour)), "Vary", hdrAccept)
-		variants = withVariant(variants, v, limits)
+
+		var n int
+
+		variants, n = withVariant(variants, v, limits)
+		dropped += n
 	}
 
-	if len(variants) != limits.perServer {
-		t.Fatalf("got %d variants, want %d", len(variants), limits.perServer)
+	if len(variants) != limits.perServer || dropped != 2 {
+		t.Fatalf("got %d variants after dropping %d, want %d after dropping 2", len(variants), dropped, limits.perServer)
 	}
 
 	for _, v := range variants {
@@ -192,9 +198,9 @@ func TestWithVariantLimit(t *testing.T) {
 	// A response with the same Vary fields replaces the stored one.
 	replacement := testVariant(200, time.Hour, []string{hdrAccept, "5"}, "Vary", hdrAccept)
 
-	variants = withVariant(variants, replacement, limits)
-	if n := len(variants); n != limits.perServer {
-		t.Fatalf("after replacement, got %d variants", n)
+	variants, dropped = withVariant(variants, replacement, limits)
+	if n := len(variants); n != limits.perServer || dropped != 0 {
+		t.Fatalf("after replacement, got %d variants after dropping %d", n, dropped)
 	}
 
 	if !slices.Contains(variants, replacement) {
@@ -211,17 +217,23 @@ func TestWithVariantServers(t *testing.T) {
 
 	var variants []*variant
 
+	dropped := 0
+
 	for server := range 10 {
 		for i := range 7 {
 			v := testVariant(200, time.Duration(server*7+i)*time.Second, []string{hdrAccept, strconv.Itoa(i)},
 				hdrDate, formatHTTPDate(testTime().Add(time.Duration(server*7+i)*time.Hour)), "Vary", hdrAccept)
 			v.dialHost = "10.0.0." + strconv.Itoa(server)
-			variants = withVariant(variants, v, limits)
+
+			var n int
+
+			variants, n = withVariant(variants, v, limits)
+			dropped += n
 		}
 	}
 
-	if len(variants) != limits.total {
-		t.Fatalf("got %d responses from 10 servers, want %d", len(variants), limits.total)
+	if len(variants) != limits.total || dropped != 70-limits.total {
+		t.Fatalf("got %d responses from 10 servers after dropping %d, want %d", len(variants), dropped, limits.total)
 	}
 
 	for _, v := range variants {

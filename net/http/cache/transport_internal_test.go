@@ -906,6 +906,11 @@ func TestMaxBytesUpdate(t *testing.T) {
 		if _, found := cache.entries.Get(testURL); found {
 			t.Errorf("after a too large update, stored %q, want no entry", stored())
 		}
+
+		// Both responses that left the cache count as dropped.
+		if drops := cache.Stats().Drops; drops != 2 {
+			t.Errorf("Stats().Drops = %d, want 2", drops)
+		}
 	})
 }
 

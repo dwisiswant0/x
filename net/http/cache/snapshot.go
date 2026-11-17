@@ -141,7 +141,12 @@ func (t *Transport) restore(key string, responses []snapshotResponse) {
 			continue
 		}
 
-		variants = withVariant(variants, restored, t.limits)
+		var dropped int
+
+		variants, dropped = withVariant(variants, restored, t.limits)
+		t.counts.stores.Add(1)
+		t.counts.addDrops(dropped)
+
 		added = true
 	}
 

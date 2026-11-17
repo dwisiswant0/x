@@ -390,11 +390,11 @@ func newer(a, b *variant) bool {
 	return a.responseTime.After(b.responseTime)
 }
 
-// withVariant returns old with added in it. added replaces a response with
-// the same Vary fields from the same server. Past limits.perServer responses
-// from added's server, the oldest of them is dropped, and past limits.total
-// in all, the oldest response is.
-func withVariant(old []*variant, added *variant, limits variantLimits) []*variant {
+// withVariant returns old with added in it, and how many responses it
+// dropped. added replaces a response with the same Vary fields from the same
+// server. Past limits.perServer responses from added's server, the oldest of
+// them is dropped, and past limits.total in all, the oldest response is.
+func withVariant(old []*variant, added *variant, limits variantLimits) ([]*variant, int) {
 	variants := make([]*variant, 0, len(old)+1)
 	sameServer := 1
 
@@ -410,15 +410,19 @@ func withVariant(old []*variant, added *variant, limits variantLimits) []*varian
 	}
 
 	variants = append(variants, added)
+	dropped := 0
+
 	if sameServer > limits.perServer {
 		variants = dropOldest(variants, func(stored *variant) bool { return stored.dialHost == added.dialHost })
+		dropped++
 	}
 
 	if len(variants) > limits.total {
 		variants = dropOldest(variants, func(*variant) bool { return true })
+		dropped++
 	}
 
-	return variants
+	return variants, dropped
 }
 
 // fitBytes returns variants without the responses larger than limit and then
