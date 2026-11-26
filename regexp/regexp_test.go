@@ -1,6 +1,7 @@
 package regexp
 
 import (
+	"slices"
 	"testing"
 )
 
@@ -75,6 +76,49 @@ func TestPCREBackreference(t *testing.T) {
 		if idxs[i] != v {
 			t.Fatalf("FindStringSubmatchIndex pcre backref: got %v want %v", idxs, expect)
 		}
+	}
+}
+
+func TestPCRESubmatchStrings(t *testing.T) {
+	tests := []struct {
+		name    string
+		pattern string
+		input   string
+		want    []string
+	}{
+		{
+			name:    "unicode capture",
+			pattern: `(?<=(🙂))a`,
+			input:   "🙂a",
+			want:    []string{"a", "🙂"},
+		},
+		{
+			name:    "unmatched group",
+			pattern: `(?<=a)(b)?c`,
+			input:   "ac",
+			want:    []string{"c", ""},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			re := MustCompile(test.pattern)
+			if got := re.FindStringSubmatch(test.input); !slices.Equal(got, test.want) {
+				t.Fatalf("FindStringSubmatch: got %q want %q", got, test.want)
+			}
+		})
+	}
+
+	re := MustCompile(`(?<=(🙂))a`)
+	want := [][]string{{"a", "🙂"}, {"a", "🙂"}}
+	got := re.FindAllStringSubmatch("🙂a🙂a", -1)
+	if !slices.EqualFunc(got, want, slices.Equal[[]string]) {
+		t.Fatalf("FindAllStringSubmatch: got %q want %q", got, want)
+	}
+
+	gotBytes := re.FindSubmatch([]byte("🙂a"))
+	if len(gotBytes) != 2 || string(gotBytes[0]) != "a" || string(gotBytes[1]) != "🙂" {
+		t.Fatalf("FindSubmatch: got %q", gotBytes)
 	}
 }
 
